@@ -77,6 +77,12 @@ const Map<String, LibraryInfo> libraries = const {
     maturity: Maturity.UNSTABLE,
     dart2jsPatchPath: '_internal/js_runtime/lib/developer_patch.dart',
   ),
+  'module': const LibraryInfo(
+    'module/module.dart',
+    categories: 'Client,Server,Embedded',
+    maturity: Maturity.EXPERIMENTAL,
+    dart2jsPatchPath: '_internal/js_runtime/lib/module_patch.dart',
+  ),
   'ffi': const LibraryInfo(
     'ffi/ffi.dart',
     categories: 'Server',

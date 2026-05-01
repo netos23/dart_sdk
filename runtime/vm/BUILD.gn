@@ -32,6 +32,7 @@ import("../lib/ffi_sources.gni")
 import("../lib/isolate_sources.gni")
 import("../lib/math_sources.gni")
 import("../lib/mirrors_sources.gni")
+import("../lib/module_sources.gni")
 import("../lib/profiler_sources.gni")
 import("../lib/typed_data_sources.gni")
 import("../lib/vmservice_sources.gni")
@@ -246,6 +247,7 @@ library_for_all_configs("libdart_lib") {
                core_runtime_cc_files + developer_runtime_cc_files +
                ffi_runtime_cc_files + isolate_runtime_cc_files +
                math_runtime_cc_files + mirrors_runtime_cc_files +
+               module_runtime_cc_files +
                typed_data_runtime_cc_files + vmservice_runtime_cc_files
 
   sources = [ "bootstrap.cc" ] + rebase_path(allsources, ".", "../lib")

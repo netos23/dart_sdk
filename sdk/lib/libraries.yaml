@@ -110,6 +110,11 @@ vm_common:
     vmservice_io:
       uri: "_internal/vm/bin/vmservice_io.dart"
 
+    module:
+      uri: "module/module.dart"
+      patches:
+        - "_internal/vm/lib/module_patch.dart"
+
 vm:
   include:
     - target: "vm_common"
@@ -285,6 +290,10 @@ wasm_common:
       uri: math/math.dart
       patches: _internal/wasm/lib/math_patch.dart
 
+    module:
+      uri: module/module.dart
+      patches: _internal/wasm/lib/module_patch.dart
+
 dart2js:
   include:
     - target: "_dart2js_common"
@@ -391,6 +400,10 @@ _dart2js_common:
     math:
       uri: "math/math.dart"
       patches: "_internal/js_runtime/lib/math_patch.dart"
+
+    module:
+      uri: "module/module.dart"
+      patches: "_internal/js_runtime/lib/module_patch.dart"
 
     typed_data:
       uri: "typed_data/typed_data.dart"
@@ -542,6 +555,10 @@ dartdevc:
     math:
       uri: "math/math.dart"
       patches: "_internal/js_dev_runtime/patch/math_patch.dart"
+
+    module:
+      uri: "module/module.dart"
+      patches: "_internal/js_dev_runtime/patch/module_patch.dart"
 
     typed_data:
       uri: "typed_data/typed_data.dart"

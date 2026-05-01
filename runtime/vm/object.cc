@@ -15603,6 +15603,10 @@ LibraryPtr Library::FfiLibrary() {
   return IsolateGroup::Current()->object_store()->ffi_library();
 }
 
+LibraryPtr Library::ModuleLibrary() {
+  return IsolateGroup::Current()->object_store()->module_library();
+}
+
 LibraryPtr Library::InternalLibrary() {
   return IsolateGroup::Current()->object_store()->_internal_library();
 }
@@ -28836,3 +28840,4 @@ ArrayPtr RecordShape::GetFieldNames(Thread* thread) const {
 }
 
 }  // namespace dart
+

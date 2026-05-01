@@ -24,6 +24,7 @@ class ObjectPointerVisitor;
   M(Convert, convert)                                                          \
   M(Developer, developer)                                                      \
   M(Ffi, ffi)                                                                  \
+  M(Module, module)                                                            \
   M(Internal, _internal)                                                       \
   M(Isolate, isolate)                                                          \
   M(Math, math)                                                                \
@@ -155,6 +156,7 @@ class ObjectPointerVisitor;
   RW(Library, convert_library)                                                 \
   RW(Library, developer_library)                                               \
   RW(Library, ffi_library)                                                     \
+  RW(Library, module_library)                                                  \
   RW(Library, _internal_library)                                               \
   RW(Library, isolate_library)                                                 \
   RW(Library, math_library)                                                    \

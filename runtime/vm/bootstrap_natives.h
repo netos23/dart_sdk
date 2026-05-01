@@ -148,6 +148,11 @@ namespace dart {
   V(Timeline_getNextTaskId, 0)                                                 \
   V(Timeline_getTraceClock, 0)                                                 \
   V(Timeline_reportTaskEvent, 5)                                               \
+  V(Module_getValue, 2)                                                        \
+  V(Module_invokeConstructor, 6)                                               \
+  V(Module_invokeMethod, 5)                                                    \
+  V(Module_invokeStaticMethod, 6)                                              \
+  V(Module_load, 1)                                                            \
   V(MicrotaskMirrorQueue_onScheduleAsyncCallback, 0)                           \
   V(MicrotaskMirrorQueue_onSchedulePriorityAsyncCallback, 0)                   \
   V(MicrotaskMirrorQueue_onAsyncCallbackComplete, 2)                           \

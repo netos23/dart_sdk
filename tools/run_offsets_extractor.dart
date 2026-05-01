@@ -34,10 +34,10 @@ Future<void> buildOffsetsExtractor(List<String> args) async {
 Future<String> runOffsetsExtractor() async {
   final (jit, aot) = await (
     forAllConfigurationsMode((String buildDir, _, __) async {
-      return await run(['$buildDir/offsets_extractor']);
+      return await run(['${buildDir}offsets_extractor']);
     }).then<String>((lines) => lines.join(',\n')),
     forAllConfigurationsMode((String buildDir, _, __) async {
-      return await run(['$buildDir/offsets_extractor_aotruntime']);
+      return await run(['${buildDir}offsets_extractor_aotruntime']);
     }).then<String>((lines) => lines.join(',\n')),
   ).wait;
 
@@ -117,13 +117,13 @@ Future<List<T>> forAllConfigurationsMode<T>(
   Future<T> Function(String buildDir, String mode, String arch) fun,
 ) async {
   final archs = [
-    'simarm',
+    // 'simarm',
     'x64',
-    'ia32',
+    // 'ia32',
     'simarm64',
     'x64c',
     'simarm64c',
-    'simriscv32',
+    // 'simriscv32',
     'simriscv64',
   ];
   final futures = <Future<T>>[];

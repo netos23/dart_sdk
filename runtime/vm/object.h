@@ -5428,6 +5428,7 @@ class Library : public Object {
   static LibraryPtr CompactHashLibrary();
   static LibraryPtr DeveloperLibrary();
   static LibraryPtr FfiLibrary();
+  static LibraryPtr ModuleLibrary();
   static LibraryPtr InternalLibrary();
   static LibraryPtr IsolateLibrary();
   static LibraryPtr MathLibrary();

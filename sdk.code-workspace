@@ -74,4 +74,69 @@
       "out",
     ],
   },
+    "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "ccpdbg dart",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/xcodebuild/DebugARM64/dart",
+        "args": [
+          // "--print-flow-graph",
+          // "--print-flow-graph-filter=Ffi",
+          // "--disassemble",
+          "tests/ffi/address_of_typeddata_generated_test.dart",
+        ],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "lldb",
+        "sourceFileMap": {
+          "runtime/": "${workspaceFolder}/runtime/",
+        },
+      },
+      {
+        "name": "ccpdbg gen_snapshot",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/xcodebuild/DebugARM64/gen_snapshot",
+        "args": [
+          "--snapshot-kind=app-aot-assembly",
+          "--assembly=/Users/dacoharkes/dart-sdk/sdk/xcodebuild/DebugARM64/generated_compilations/custom-configuration-4/tests_ffi_isolate_independent_il_based_global_var_test/out.S",
+          "--iic-impl-il",
+          "-Dtest_runner.configuration=custom-configuration-4",
+          "--ignore-unrecognized-flags",
+          "--packages=/Users/dacoharkes/dart-sdk/sdk/.packages",
+          "/Users/dacoharkes/dart-sdk/sdk/xcodebuild/DebugARM64/generated_compilations/custom-configuration-4/tests_ffi_isolate_independent_il_based_function_call_2_test/out.dill",
+        ],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}/xcodebuild/DebugARM64/",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "lldb",
+        "sourceFileMap": {
+          "../../": "${workspaceFolder}/",
+        },
+      },
+      {
+        "name": "ccpdbg dartaotruntime",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/xcodebuild/DebugARM64/dartaotruntime",
+        "args": [
+          "/Users/dacoharkes/dart-sdk/sdk/xcodebuild/DebugARM64/generated_compilations/custom-configuration-4/runtime_tests_vm_dart_memoizable_idempotent_test/out.aotsnapshot",
+        ],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}/xcodebuild/DebugARM64/",
+        "environment": [],
+        "externalConsole": false,
+        "MIMode": "lldb",
+        "sourceFileMap": {
+          "../../": "${workspaceFolder}/",
+        },
+      }
+    ]
+}
 }

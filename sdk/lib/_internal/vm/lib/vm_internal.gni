@@ -39,6 +39,7 @@ vm_internal_sdk_sources = [
   "mirror_reference.dart",
   "mirrors_impl.dart",
   "mirrors_patch.dart",
+  "module_patch.dart",
   "object_patch.dart",
   "print_patch.dart",
   "profiler.dart",
