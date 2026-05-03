@@ -24,6 +24,7 @@ class DartRunnerTarget extends VmTarget {
     'dart:_internal',
     'dart:isolate',
     'dart:math',
+    'dart:module',
 
     // The library dart:mirrors may be ignored by the VM, e.g. when built in
     // PRODUCT mode.

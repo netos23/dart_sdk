@@ -100,6 +100,7 @@ declare_args() {
 # ......js_util/
 # ......math/
 # ......mirrors/
+# ......module/
 # ......typed_data/
 # ......api_readme.md
 
@@ -227,6 +228,7 @@ _full_sdk_libraries = [
   "js_util",
   "math",
   "mirrors",
+  "module",
   "svg",
   "typed_data",
   "_wasm",
@@ -253,6 +255,7 @@ _full_sdk_libraries = [
 #   "isolate",
 #   "math",
 #   "mirrors",
+#   "module",
 #   "typed_data",
 # ]
 _platform_sdk_libraries = _full_sdk_libraries

@@ -85,6 +85,7 @@ class DevCompilerTarget extends Target {
     'dart:js_interop_unsafe',
     'dart:js_util',
     'dart:math',
+    'dart:module',
     'dart:typed_data',
     'dart:indexed_db',
     'dart:html',

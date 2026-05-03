@@ -93,6 +93,7 @@ class VmTarget extends Target {
     // The library dart:mirrors may be ignored by the VM, e.g. when built in
     // PRODUCT mode.
     'dart:mirrors',
+    'dart:module',
 
     'dart:typed_data',
     'dart:vmservice_io',
