@@ -15,7 +15,7 @@ namespace dart {
   UNREACHABLE();
 }
 
-DEFINE_NATIVE_ENTRY(Module_load, 0, 1) {
+DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
   // TODO(implementation): Decode ModuleSource and return a Module instance.
   ThrowModuleUnsupported();
 }
@@ -41,5 +41,4 @@ DEFINE_NATIVE_ENTRY(Module_invokeConstructor, 0, 6) {
 }
 
 }  // namespace dart
-
 
