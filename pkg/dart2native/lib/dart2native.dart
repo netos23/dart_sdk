@@ -97,6 +97,7 @@ Future<ProcessResult> generateKernelHelper({
   bool enableAsserts = false,
   bool fromDill = false,
   bool aot = false,
+  bool module = false,
   bool embedSources = false,
   bool linkPlatform = true,
   bool product = true,
@@ -109,6 +110,7 @@ Future<ProcessResult> generateKernelHelper({
     if (targetOS != null) '--target-os=$targetOS',
     if (fromDill) '--from-dill=$sourceFile',
     if (aot) '--aot',
+    if (module) '--module',
     if (!embedSources) '--no-embed-sources',
     if (!linkPlatform) '--no-link-platform',
     if (enableAsserts) '--enable-asserts',
@@ -135,6 +137,33 @@ Future<ProcessResult> generateAotSnapshotHelper(
   return Process.run(genSnapshot, [
     '--snapshot-kind=app-aot-elf',
     '--elf=$snapshotFile',
+    if (debugFile != null) '--save-debugging-info=$debugFile',
+    if (debugFile != null) '--dwarf-stack-traces',
+    if (debugFile != null) '--strip',
+    if (enableAsserts) '--enable-asserts',
+    ...extraGenSnapshotOptions,
+    kernelFile
+  ]);
+}
+
+/// Generates an AOT module snapshot that can be dynamically loaded at runtime
+/// via dart:module. The output format depends on [targetOS]:
+///   - macOS  → MachO dylib  (`--macho`)
+///   - others → ELF .so      (`--elf`)
+Future<ProcessResult> generateModuleSnapshotHelper(
+    String genSnapshot,
+    String kernelFile,
+    String snapshotFile,
+    String? debugFile,
+    bool enableAsserts,
+    List<String> extraGenSnapshotOptions,
+    [OS? targetOS]) {
+  final outputFlag = targetOS == OS.macOS
+      ? '--macho=$snapshotFile'
+      : '--elf=$snapshotFile';
+  return Process.run(genSnapshot, [
+    '--snapshot-kind=app-aot-module',
+    outputFlag,
     if (debugFile != null) '--save-debugging-info=$debugFile',
     if (debugFile != null) '--dwarf-stack-traces',
     if (debugFile != null) '--strip',

@@ -27,7 +27,8 @@ class Snapshot {
     kFullJIT,   // Full + JIT code
     kFullAOT,   // Full + AOT code
     kNone,      // gen_snapshot
-    kInvalid
+    kInvalid,
+    kFullAOTModule  // Full + AOT code for a module (ELF .so)
   };
   static const char* KindToCString(Kind kind);
 
@@ -62,10 +63,11 @@ class Snapshot {
 
   static bool IsFull(Kind kind) {
     return (kind == kFull) || (kind == kFullCore) || (kind == kFullJIT) ||
-           (kind == kFullAOT);
+           (kind == kFullAOT) || (kind == kFullAOTModule);
   }
   static bool IncludesCode(Kind kind) {
-    return (kind == kFullJIT) || (kind == kFullAOT);
+    return (kind == kFullJIT) || (kind == kFullAOT) ||
+           (kind == kFullAOTModule);
   }
 
   static bool IncludesStringsInROData(Kind kind) {

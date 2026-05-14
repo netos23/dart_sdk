@@ -13,12 +13,18 @@ import 'src/generate_utils.dart';
 /// The kinds of native executables supported by [KernelGenerator].
 enum Kind {
   aot,
-  exe;
+  exe,
+  module;
 
-  String appendFileExtension(String fileName) {
+  String appendFileExtension(String fileName, [OS? targetOS]) {
     return switch (this) {
       Kind.aot => '$fileName.aot',
       Kind.exe => '$fileName.exe',
+      Kind.module => switch (targetOS) {
+        OS.macOS => '$fileName.dylib',
+        OS.windows => '$fileName.dll',
+        _ => '$fileName.so',
+      },
     };
   }
 }
@@ -225,6 +231,7 @@ class _Generator {
       ],
       recordedUsagesFile: recordedUsagesFile,
       aot: true,
+      module: _kind == Kind.module
     );
     await _forwardOutput(kernelResult);
     if (kernelResult.exitCode != 0) {
@@ -247,7 +254,7 @@ class _Generator {
       '',
     );
     return _normalize(
-      _outputFile ?? _kind.appendFileExtension(sourceWithoutDartOrDill),
+      _outputFile ?? _kind.appendFileExtension(sourceWithoutDartOrDill, _targetOS),
     )!;
   }
 
@@ -262,23 +269,37 @@ class _Generator {
       print('Compiling $_sourcePath to $outputPath using format $_kind:');
       print('Generating AOT snapshot. $_genSnapshot $extraOptions');
     }
-    final snapshotFile = _kind == Kind.aot
+    final snapshotFile = (_kind == Kind.aot || _kind == Kind.module)
         ? outputPath
         : path.join(_tempDir.path, 'snapshot.aot');
-    final snapshotResult = await generateAotSnapshotHelper(
-      _genSnapshot,
-      kernelFile,
-      snapshotFile,
-      debugPath,
-      _enableAsserts,
-      extraOptions,
-    );
+
+    final ProcessResult snapshotResult;
+    if (_kind == Kind.module) {
+      snapshotResult = await generateModuleSnapshotHelper(
+        _genSnapshot,
+        kernelFile,
+        snapshotFile,
+        debugPath,
+        _enableAsserts,
+        extraOptions,
+        _targetOS,
+      );
+    } else {
+      snapshotResult = await generateAotSnapshotHelper(
+        _genSnapshot,
+        kernelFile,
+        snapshotFile,
+        debugPath,
+        _enableAsserts,
+        extraOptions,
+      );
+    }
 
     if (_verbose || snapshotResult.exitCode != 0) {
       await _forwardOutput(snapshotResult);
     }
     if (snapshotResult.exitCode != 0) {
-      throw StateError('Generating AOT snapshot failed!');
+      throw StateError('Generating snapshot failed!');
     }
 
     if (_kind == Kind.exe) {

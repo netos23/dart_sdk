@@ -72,6 +72,8 @@ import 'transformations/type_flow/transformer.dart'
 import 'transformations/unreachable_code_elimination.dart'
     as unreachable_code_elimination;
 import 'transformations/vm_constant_evaluator.dart' as vm_constant_evaluator;
+import 'transformations/module_deferred_loading.dart'
+    as module_deferred_loading;
 
 /// Declare options consumed by [runCompiler].
 void declareCompilerOptions(ArgParser args) {
@@ -97,6 +99,7 @@ void declareCompilerOptions(ArgParser args) {
         'Produce kernel file for AOT compilation (enables global transformations).',
     defaultsTo: false,
   );
+  args.addFlag('module', help: 'Compile as a dart module.', defaultsTo: false);
   args.addFlag(
     'support-mirrors',
     help:
@@ -309,7 +312,8 @@ Future<int> runCompiler(ArgResults options, String usage) async {
   final String? fromDillFile = options['from-dill'];
   final List<String>? fileSystemRoots = options['filesystem-root'];
   final String? targetOS = options['target-os'];
-  final bool aot = options['aot'];
+  final bool module = options['module'];
+  final bool aot = options['aot'] || module;
   final bool tfa = options['tfa'];
   final bool rta = options['rta'];
   final bool linkPlatform = options['link-platform'];
@@ -458,6 +462,7 @@ Future<int> runCompiler(ArgResults options, String usage) async {
       treeShakeWriteOnlyFields: treeShakeWriteOnlyFields,
       targetOS: targetOS,
       fromDillFile: fromDillFile,
+      requireMain: !module,
     ),
   );
 
@@ -839,7 +844,11 @@ Future runGlobalTransformations(
     args.keepClassNamesImplementing,
   );
 
-  deferred_loading.transformComponent(component, coreTypes, target);
+  if (args.requireMain) {
+    deferred_loading.transformComponent(component, coreTypes, target);
+  } else {
+    module_deferred_loading.transformComponent(component, target);
+  }
 
   final recordedUsagesFile = args.recordedUsages;
   if (recordedUsagesFile != null) {

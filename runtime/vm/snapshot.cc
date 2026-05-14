@@ -19,6 +19,8 @@ const char* Snapshot::KindToCString(Kind kind) {
       return "full-jit";
     case kFullAOT:
       return "full-aot";
+    case kFullAOTModule:
+      return "full-aot-module";
     case kNone:
       return "none";
     case kInvalid:

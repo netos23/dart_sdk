@@ -421,6 +421,14 @@ IsolateGroup::~IsolateGroup() {
   ASSERT(new_marking_stack_ == nullptr);
   ASSERT(deferred_marking_stack_ == nullptr);
 
+  // Release loaded modules. DL handles are intentionally not unloaded here
+  // because module code may still be referenced from Code objects on the heap
+  // that were already collected, and we cannot safely determine liveness.
+  for (intptr_t i = 0; i < loaded_modules_.length(); i++) {
+    delete loaded_modules_[i];
+  }
+  loaded_modules_.Clear();
+
   if (obfuscation_map_ != nullptr) {
     for (intptr_t i = 0; obfuscation_map_[i] != nullptr; i++) {
       delete[] obfuscation_map_[i];
@@ -437,6 +445,57 @@ IsolateGroup::~IsolateGroup() {
   delete debugger_;
   debugger_ = nullptr;
 #endif
+}
+
+LoadedModule::~LoadedModule() {
+  delete object_store;
+  free(initial_field_values);
+  free(shared_initial_field_values);
+  free(classes);
+  delete dispatch_table;
+  // dl_handle is intentionally not closed: module code may still be executing.
+}
+
+void LoadedModule::VisitObjectPointers(ObjectPointerVisitor* visitor) {
+  if (object_store != nullptr) {
+    object_store->VisitObjectPointers(visitor);
+  }
+  if (initial_field_values != nullptr && initial_field_count > 0) {
+    visitor->set_gc_root_type("module initial field table");
+    visitor->VisitPointers(initial_field_values,
+                           initial_field_values + initial_field_count - 1);
+    visitor->clear_gc_root_type();
+  }
+  if (shared_initial_field_values != nullptr &&
+      shared_initial_field_count > 0) {
+    visitor->set_gc_root_type("module shared initial field table");
+    visitor->VisitPointers(
+        shared_initial_field_values,
+        shared_initial_field_values + shared_initial_field_count - 1);
+    visitor->clear_gc_root_type();
+  }
+  if (classes != nullptr && class_object_count > 0) {
+    visitor->set_gc_root_type("module classes");
+    visitor->VisitPointers(classes, classes + class_object_count - 1);
+    visitor->clear_gc_root_type();
+  }
+}
+
+intptr_t IsolateGroup::AddLoadedModule(LoadedModule* module) {
+  // Caller must hold program_lock() write.
+  loaded_modules_.Add(module);
+  return loaded_modules_.length() - 1;
+}
+
+LoadedModule* IsolateGroup::GetLoadedModule(intptr_t index) const {
+  // Caller must hold at least program_lock() read.
+  if (index < 0 || index >= loaded_modules_.length()) return nullptr;
+  return loaded_modules_[index];
+}
+
+intptr_t IsolateGroup::loaded_module_count() const {
+  // Caller must hold at least program_lock() read.
+  return loaded_modules_.length();
 }
 
 void IsolateGroup::RegisterIsolate(Isolate* isolate) {
@@ -3007,6 +3066,11 @@ void IsolateGroup::VisitSharedPointers(ObjectPointerVisitor* visitor,
       break;
     case kSharedFieldTable:
       shared_field_table()->VisitObjectPointers(visitor);
+      break;
+    case kLoadedModules:
+      for (intptr_t i = 0; i < loaded_modules_.length(); i++) {
+        loaded_modules_[i]->VisitObjectPointers(visitor);
+      }
       break;
     case kBackgroundCompiler:
       NOT_IN_PRECOMPILED(background_compiler()->VisitPointers(visitor));

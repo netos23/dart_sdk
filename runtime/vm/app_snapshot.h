@@ -17,6 +17,8 @@
 
 namespace dart {
 
+struct LoadedModule;  // Defined in vm/isolate.h.
+
 // For full snapshots, we use a clustered snapshot format that trades longer
 // serialization time for faster deserialization time and smaller snapshots.
 // Objects are clustered by class to allow writing type information once per
@@ -170,6 +172,11 @@ class FullSnapshotReader {
   ApiErrorPtr ReadVMSnapshot();
   ApiErrorPtr ReadProgramSnapshot();
   ApiErrorPtr ReadUnitSnapshot(const LoadingUnit& unit);
+  // Deserializes a kFullAOTModule snapshot into |loaded_module|.
+  // Registers the module in the IsolateGroup (under program_lock() write).
+  // Returns the 0-based module index via |out_module_id|.
+  ApiErrorPtr ReadModuleSnapshot(LoadedModule* loaded_module,
+                                 intptr_t* out_module_id);
 
  private:
   IsolateGroup* isolate_group() const { return thread_->isolate_group(); }

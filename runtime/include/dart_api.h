@@ -4003,6 +4003,15 @@ DART_EXPORT bool Dart_WriteProfileToTimeline(Dart_Port main_port, char** error);
  */
 DART_EXPORT Dart_Handle Dart_Precompile(void);
 
+/**
+ * Like Dart_Precompile but signals the precompiler that the output is a
+ * dart:module shared library. The root library is not required to export a
+ * main function; all entry points are provided via @pragma("vm:entry-point").
+ *
+ * \return An error handle if a compilation error was encountered.
+ */
+DART_EXPORT Dart_Handle Dart_PrecompileAsModule(void);
+
 typedef void (*Dart_CreateLoadingUnitCallback)(
     void* callback_data,
     intptr_t loading_unit_id,
@@ -4174,6 +4183,21 @@ Dart_CreateAppAOTSnapshotAsBinary(Dart_AotBinaryFormat format,
                                   void* debug_callback_data,
                                   const char* identifier,
                                   const char* path);
+
+/**
+ * Like Dart_CreateAppAOTSnapshotAsBinary, but generates a kFullAOTModule
+ * snapshot that can be dynamically loaded at runtime via dart:module.
+ * Only ELF/MachO format is supported. The resulting .so/.dylib exposes the standard
+ * kIsolateSnapshotData / kIsolateSnapshotInstructions C symbols.
+ */
+DART_EXPORT DART_API_WARN_UNUSED_RESULT Dart_Handle
+Dart_CreateModuleAOTSnapshotAsBinary(Dart_AotBinaryFormat format,
+                                     Dart_StreamingWriteCallback callback,
+                                     void* callback_data,
+                                     bool stripped,
+                                     void* debug_callback_data,
+                                     const char* identifier,
+                                     const char* path);
 
 /**
  *  Like Dart_CreateAppAOTSnapshotAsAssembly, but only includes

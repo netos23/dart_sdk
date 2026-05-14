@@ -4,24 +4,27 @@ import 'dart:io';
 import 'dart:typed_data';
 
 
-sealed class ModuleSource {
-  Future<Uint8List> loadData();
-}
-
-base class FileModuleSource extends ModuleSource {
+class ModuleSource {
+  @pragma("vm:entry-point")
   final String path;
-
-  FileModuleSource({required this.path});
-
+  
+  ModuleSource(this.path);
 
   @override
-  Future<Uint8List> loadData() {
-    return File(path).readAsBytes();
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+          other is ModuleSource && runtimeType == other.runtimeType &&
+              path == other.path;
+
+  @override
+  int get hashCode => path.hashCode;
+
+  @override
+  String toString() {
+    return 'ModuleSource{path: $path}';
   }
-
+  
 }
-
-
 
 class Module {
   external factory Module.load(ModuleSource source);

@@ -362,11 +362,11 @@ static void Jump(const Error& error) {
   Thread::Current()->long_jump_base()->Jump(1, error);
 }
 
-ErrorPtr Precompiler::CompileAll() {
+ErrorPtr Precompiler::CompileAll(bool is_module) {
   Thread* thread = Thread::Current();
   LongJumpScope jump(thread);
   if (DART_SETJMP(*jump.Set()) == 0) {
-    Precompiler precompiler(thread);
+    Precompiler precompiler(thread, is_module);
     precompiler.DoCompileAll();
     precompiler.ReportStats();
     return Error::null();
@@ -383,7 +383,7 @@ void Precompiler::ReportStats() {
   thread()->compiler_timings()->Print();
 }
 
-Precompiler::Precompiler(Thread* thread)
+Precompiler::Precompiler(Thread* thread, bool is_module)
     : thread_(thread),
       zone_(nullptr),
       changed_(false),
@@ -424,7 +424,8 @@ Precompiler::Precompiler(Thread* thread)
       seen_table_selectors_(),
       api_uses_(),
       error_(Error::Handle()),
-      get_runtime_type_is_unique_(false) {
+      get_runtime_type_is_unique_(false),
+      is_module_(is_module) {
   ASSERT(Precompiler::singleton_ == nullptr);
   Precompiler::singleton_ = this;
 
@@ -724,6 +725,10 @@ void Precompiler::AddRoots() {
   HANDLESCOPE(T);
   AddSelector(Symbols::NoSuchMethod());
   AddSelector(Symbols::call());  // For speed, not correctness.
+
+  // Modules have no main entry point; all exported symbols are roots via
+  // @pragma("vm:entry-point") annotations processed by AddAnnotatedRoots().
+  if (is_module_) return;
 
   // Add main as an entry point.
   const Library& lib = Library::Handle(IG->object_store()->root_library());

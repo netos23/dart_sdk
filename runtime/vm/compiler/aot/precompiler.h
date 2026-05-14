@@ -241,7 +241,7 @@ typedef DirectChainedHashMap<InstanceKeyValueTrait> InstanceSet;
 
 class Precompiler : public ValueObject {
  public:
-  static ErrorPtr CompileAll();
+  static ErrorPtr CompileAll(bool is_module = false);
 
   static void CompileFunction(Precompiler* precompiler,
                               Thread* thread,
@@ -298,7 +298,7 @@ class Precompiler : public ValueObject {
     const bool was_tracing_;
   };
 
-  explicit Precompiler(Thread* thread);
+  explicit Precompiler(Thread* thread, bool is_module = false);
   ~Precompiler();
 
   void ReportStats();
@@ -408,6 +408,7 @@ class Precompiler : public ValueObject {
   compiler::DispatchTableGenerator* dispatch_table_generator_;
 
   bool get_runtime_type_is_unique_;
+  bool is_module_;
 
   Phase phase_ = Phase::kPreparation;
   PrecompilerTracer* tracer_ = nullptr;

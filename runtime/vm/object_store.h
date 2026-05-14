@@ -302,6 +302,11 @@ class ObjectPointerVisitor;
   RW(Code, suspend_sync_star_at_yield_stub)                                    \
   RW(Array, dispatch_table_code_entries)                                       \
   RW(GrowableObjectArray, instructions_tables)                                 \
+  /* Per-module runtime state (dart:module integration). */                    \
+  RW(GrowableObjectArray, modules)                                             \
+  RW(GrowableObjectArray, module_meta_tables)                                  \
+  RW(GrowableObjectArray, module_dispatch_table_code_entries)                  \
+  RW(GrowableObjectArray, module_instructions_tables)                          \
   RW(Array, obfuscation_map)                                                   \
   RW(Array, loading_unit_uris)                                                 \
   RW(Class, ffi_pointer_class)                                                 \
@@ -622,6 +627,7 @@ class ObjectStore {
         return reinterpret_cast<ObjectPtr*>(&global_object_pool_);
       case Snapshot::kFullJIT:
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<ObjectPtr*>(&slow_tts_stub_);
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -634,6 +640,7 @@ class ObjectStore {
 
   friend class ProgramSerializationRoots;
   friend class ProgramDeserializationRoots;
+  friend class ModuleDeserializationRoots;
   friend class ProgramVisitor;
 
   DISALLOW_COPY_AND_ASSIGN(ObjectStore);

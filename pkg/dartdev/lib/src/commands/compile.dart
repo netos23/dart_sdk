@@ -453,6 +453,7 @@ class CompileJitSnapshotCommand extends CompileSubcommandCommand {
 class CompileNativeCommand extends CompileSubcommandCommand {
   static const String exeCmdName = 'exe';
   static const String aotSnapshotCmdName = 'aot-snapshot';
+  static const String moduleCmdName = 'module';
   static final supportedTargetPlatforms = <Target>{
     Target.linuxArm,
     Target.linuxArm64,
@@ -1146,6 +1147,12 @@ class CompileCommand extends DartdevCommand {
       format: Kind.aot,
       verbose: verbose,
       nativeAssetsExperimentEnabled: nativeAssetsExperimentEnabled,
+    ));
+    addSubcommand(CompileNativeCommand(
+      commandName: CompileNativeCommand.moduleCmdName,
+      help: 'to an AOT module (.so) loadable via dart:module.',
+      format: Kind.module,
+      verbose: verbose,
     ));
     addSubcommand(CompileWasmCommand(verbose: verbose));
   }

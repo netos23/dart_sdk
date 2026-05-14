@@ -2,6 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
@@ -22,6 +23,7 @@
 #include "vm/growable_array.h"
 #include "vm/heap/heap.h"
 #include "vm/image_snapshot.h"
+#include "vm/isolate.h"
 #include "vm/native_entry.h"
 #include "vm/object.h"
 #include "vm/object_store.h"
@@ -66,6 +68,10 @@ class Serializer;
 class Deserializer;
 
 namespace {
+
+inline bool IsAotSnapshotKind(Snapshot::Kind kind) {
+  return kind == Snapshot::kFullAOT || kind == Snapshot::kFullAOTModule;
+}
 
 // Serialized clusters are identified by their CID. So to insert custom clusters
 // we need to assign them a CID that is otherwise never serialized.
@@ -751,8 +757,15 @@ class Deserializer : public ThreadStackResource {
 
   intptr_t ReadCid() {
     COMPILE_ASSERT(UntaggedObject::kClassIdTagSize <= 32);
-    return Read<int32_t>();
+    intptr_t cid = Read<int32_t>();
+    if (cid_offset_ != 0 && cid >= kNumPredefinedCids) {
+      cid += cid_offset_;
+    }
+    return cid;
   }
+
+  intptr_t cid_offset() const { return cid_offset_; }
+  void set_cid_offset(intptr_t offset) { cid_offset_ = offset; }
 
   void ReadInstructions(CodePtr code, bool deferred);
   void EndInstructions();
@@ -771,13 +784,17 @@ class Deserializer : public ThreadStackResource {
                          const InstructionsTable& root_instruction_table,
                          intptr_t deferred_code_start_index,
                          intptr_t deferred_code_end_index);
+  // Reads a module dispatch table from the current stream position and
+  // installs it as the IsolateGroup's dispatch table, extending the host's
+  // coverage to include module class CIDs.
+  void ReadModuleDispatchTable();
 
   intptr_t next_index() const { return next_ref_index_; }
   Heap* heap() const { return heap_; }
   Zone* zone() const { return zone_; }
   Snapshot::Kind kind() const {
 #if defined(DART_PRECOMPILED_RUNTIME)
-    return Snapshot::kFullAOT;
+    return IsAotSnapshotKind(kind_) ? kind_ : Snapshot::kFullAOT;
 #else
     return kind_;
 #endif
@@ -828,7 +845,11 @@ class Deserializer : public ThreadStackResource {
 
     intptr_t ReadCid() {
       COMPILE_ASSERT(UntaggedObject::kClassIdTagSize <= 32);
-      return Read<int32_t>();
+      intptr_t cid = Read<int32_t>();
+      if (d_->cid_offset_ != 0 && cid >= kNumPredefinedCids) {
+        cid += d_->cid_offset_;
+      }
+      return cid;
     }
 
     template <typename T, typename... P>
@@ -870,6 +891,10 @@ class Deserializer : public ThreadStackResource {
   intptr_t code_start_index_ = 0;
   intptr_t code_stop_index_ = 0;
   intptr_t instructions_index_ = 0;
+  // User-class CID offset for module snapshot loading. Non-zero means all
+  // user-class CIDs read from the snapshot are shifted up by this amount so
+  // that module classes occupy fresh CIDs above the host program's classes.
+  intptr_t cid_offset_ = 0;
   DeserializationCluster** clusters_;
   const bool is_non_root_unit_;
   InstructionsTable& instructions_table_;
@@ -1051,7 +1076,7 @@ class ClassSerializationCluster : public SerializationCluster {
       s->UnexpectedObject(cls, "Class with illegal cid");
     }
     s->WriteCid(class_id);
-    if (s->kind() != Snapshot::kFullAOT) {
+    if (!IsAotSnapshotKind(s->kind())) {
       s->Write<uint32_t>(cls->untag()->kernel_offset_);
     }
     s->Write<int32_t>(Class::target_instance_size_in_words(cls));
@@ -1059,7 +1084,7 @@ class ClassSerializationCluster : public SerializationCluster {
     s->Write<int32_t>(Class::target_type_arguments_field_offset_in_words(cls));
     s->Write<int16_t>(cls->untag()->num_type_arguments_);
     s->Write<uint16_t>(cls->untag()->num_native_fields_);
-    if (s->kind() != Snapshot::kFullAOT) {
+    if (!IsAotSnapshotKind(s->kind())) {
       s->WriteTokenPosition(cls->untag()->token_pos_);
       s->WriteTokenPosition(cls->untag()->end_token_pos_);
       s->WriteCid(cls->untag()->implementor_cid_);
@@ -1114,7 +1139,7 @@ class ClassDeserializationCluster : public DeserializationCluster {
       intptr_t class_id = d.ReadCid();
       cls->untag()->id_ = class_id;
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(d_->kind() != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(d_->kind()));
       cls->untag()->kernel_offset_ = d.Read<uint32_t>();
 #endif
       if (!IsInternalVMdefinedClassId(class_id)) {
@@ -1141,7 +1166,7 @@ class ClassDeserializationCluster : public DeserializationCluster {
       cls->untag()->num_type_arguments_ = d.Read<int16_t>();
       cls->untag()->num_native_fields_ = d.Read<uint16_t>();
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(d_->kind() != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(d_->kind()));
       cls->untag()->token_pos_ = d.ReadTokenPosition();
       cls->untag()->end_token_pos_ = d.ReadTokenPosition();
       cls->untag()->implementor_cid_ = d.ReadCid();
@@ -1161,7 +1186,7 @@ class ClassDeserializationCluster : public DeserializationCluster {
       cls->untag()->id_ = class_id;
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(d_->kind() != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(d_->kind()));
       cls->untag()->kernel_offset_ = d.Read<uint32_t>();
 #endif
       cls->untag()->host_instance_size_in_words_ = d.Read<int32_t>();
@@ -1179,7 +1204,7 @@ class ClassDeserializationCluster : public DeserializationCluster {
       cls->untag()->num_type_arguments_ = d.Read<int16_t>();
       cls->untag()->num_native_fields_ = d.Read<uint16_t>();
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(d_->kind() != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(d_->kind()));
       cls->untag()->token_pos_ = d.ReadTokenPosition();
       cls->untag()->end_token_pos_ = d.ReadTokenPosition();
       cls->untag()->implementor_cid_ = d.ReadCid();
@@ -1353,6 +1378,14 @@ class CanonicalSetDeserializationCluster : public DeserializationCluster {
   const bool is_root_unit_;
   intptr_t first_element_;
   typename SetType::ArrayHandle& table_;
+
+  // Returns true when the cluster's canonical table should be installed into
+  // the host's object store. Module snapshots must NOT replace the host's
+  // already-populated canonical tables; their objects remain canonical via the
+  // read-only data image without being merged into the host tables.
+  bool ShouldInstallCanonicalTable(Deserializer* d) const {
+    return !table_.IsNull() && d->kind() != Snapshot::kFullAOTModule;
+  }
 
   void VerifyCanonicalSet(Deserializer* d,
                           const Array& refs,
@@ -1601,7 +1634,7 @@ class TypeArgumentsDeserializationCluster
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (!table_.IsNull()) {
+    if (ShouldInstallCanonicalTable(d)) {
       auto object_store = d->isolate_group()->object_store();
       VerifyCanonicalSet(
           d, refs, Array::Handle(object_store->canonical_type_arguments()));
@@ -1647,7 +1680,7 @@ class PatchClassSerializationCluster : public SerializationCluster {
       PatchClassPtr cls = objects_[i];
       AutoTraceObject(cls);
       WriteFromTo(cls);
-      if (s->kind() != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(s->kind())) {
         s->Write<int32_t>(cls->untag()->kernel_library_index_);
       }
     }
@@ -1677,7 +1710,7 @@ class PatchClassDeserializationCluster : public DeserializationCluster {
                                      PatchClass::InstanceSize());
       d.ReadFromTo(cls);
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(d_->kind() != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(d_->kind()));
       cls->untag()->kernel_library_index_ = d.Read<int32_t>();
 #endif
     }
@@ -1699,14 +1732,14 @@ class FunctionSerializationCluster : public SerializationCluster {
     objects_.Add(func);
 
     PushFromTo(func);
-    if (kind == Snapshot::kFullAOT) {
+    if (IsAotSnapshotKind(kind)) {
       s->Push(func->untag()->code());
     } else if (kind == Snapshot::kFullJIT) {
       NOT_IN_PRECOMPILED(s->Push(func->untag()->unoptimized_code()));
       s->Push(func->untag()->code());
       s->Push(func->untag()->ic_data_array_or_bytecode());
     }
-    if (kind != Snapshot::kFullAOT) {
+    if (!IsAotSnapshotKind(kind)) {
       NOT_IN_PRECOMPILED(s->Push(func->untag()->positional_parameter_names()));
     }
   }
@@ -1727,7 +1760,7 @@ class FunctionSerializationCluster : public SerializationCluster {
       FunctionPtr func = objects_[i];
       AutoTraceObjectName(func, MakeDisambiguatedFunctionName(s, func));
       WriteFromTo(func);
-      if (kind == Snapshot::kFullAOT) {
+      if (IsAotSnapshotKind(kind)) {
 #if defined(DART_PRECOMPILER)
         CodePtr code = func->untag()->code();
         const auto code_index = s->GetCodeIndex(code);
@@ -1742,14 +1775,14 @@ class FunctionSerializationCluster : public SerializationCluster {
         WriteCompressedField(func, ic_data_array_or_bytecode);
       }
 
-      if (kind != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(kind)) {
         NOT_IN_PRECOMPILED(
             WriteCompressedField(func, positional_parameter_names));
       }
 
 #if defined(DART_PRECOMPILER) && !defined(PRODUCT)
       TokenPosition token_pos = func->untag()->token_pos_;
-      if (kind == Snapshot::kFullAOT) {
+      if (IsAotSnapshotKind(kind)) {
         // We use then token_pos property to store the line number
         // in AOT snapshots.
         intptr_t line = -1;
@@ -1763,11 +1796,11 @@ class FunctionSerializationCluster : public SerializationCluster {
       }
       s->WriteTokenPosition(token_pos);
 #else
-      if (kind != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(kind)) {
         s->WriteTokenPosition(func->untag()->token_pos_);
       }
 #endif
-      if (kind != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(kind)) {
         s->WriteTokenPosition(func->untag()->end_token_pos_);
         s->Write<uint32_t>(func->untag()->kernel_offset_);
         s->Write<bool>(func->untag()->is_optimizable_);
@@ -1905,7 +1938,7 @@ class FunctionDeserializationCluster : public DeserializationCluster {
 #endif
 
 #if defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(kind == Snapshot::kFullAOT);
+      ASSERT(IsAotSnapshotKind(kind));
       const intptr_t code_index = d.ReadUnsigned();
       uword entry_point = 0;
       CodePtr code = d_->GetCodeByIndex(code_index, &entry_point);
@@ -1915,7 +1948,7 @@ class FunctionDeserializationCluster : public DeserializationCluster {
         func->untag()->unchecked_entry_point_ = entry_point;
       }
 #else
-      ASSERT(kind != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(kind));
       if (kind == Snapshot::kFullJIT) {
         func->untag()->unoptimized_code_ = static_cast<CodePtr>(d.ReadRef());
         func->untag()->code_ = static_cast<CodePtr>(d.ReadRef());
@@ -1924,7 +1957,7 @@ class FunctionDeserializationCluster : public DeserializationCluster {
 #endif
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(kind != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(kind));
       func->untag()->positional_parameter_names_ =
           static_cast<ArrayPtr>(d.ReadRef());
 #endif
@@ -1952,7 +1985,7 @@ class FunctionDeserializationCluster : public DeserializationCluster {
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (d->kind() == Snapshot::kFullAOT) {
+    if (IsAotSnapshotKind(d->kind())) {
       Function& func = Function::Handle(d->zone());
       for (intptr_t i = start_index_, n = stop_index_; i < n; i++) {
         func ^= refs.At(i);
@@ -2003,7 +2036,7 @@ class ClosureDataSerializationCluster : public SerializationCluster {
     ClosureDataPtr data = ClosureData::RawCast(object);
     objects_.Add(data);
 
-    if (s->kind() != Snapshot::kFullAOT) {
+    if (!IsAotSnapshotKind(s->kind())) {
       s->Push(data->untag()->context_scope());
     }
     s->Push(data->untag()->parent_function());
@@ -2024,7 +2057,7 @@ class ClosureDataSerializationCluster : public SerializationCluster {
     for (intptr_t i = 0; i < count; i++) {
       ClosureDataPtr data = objects_[i];
       AutoTraceObject(data);
-      if (s->kind() != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(s->kind())) {
         WriteCompressedField(data, context_scope);
       }
       WriteCompressedField(data, parent_function);
@@ -2055,7 +2088,7 @@ class ClosureDataDeserializationCluster : public DeserializationCluster {
       ClosureDataPtr data = static_cast<ClosureDataPtr>(d.Ref(id));
       Deserializer::InitializeHeader(data, kClosureDataCid,
                                      ClosureData::InstanceSize());
-      if (d_->kind() == Snapshot::kFullAOT) {
+      if (IsAotSnapshotKind(d_->kind())) {
         data->untag()->context_scope_ = ContextScope::null();
       } else {
         data->untag()->context_scope_ =
@@ -2154,7 +2187,7 @@ class FieldSerializationCluster : public SerializationCluster {
     // Write out the initializer function
     s->Push(field->untag()->initializer_function());
 
-    if (kind != Snapshot::kFullAOT) {
+    if (!IsAotSnapshotKind(kind)) {
       s->Push(field->untag()->guarded_list_length());
     }
     if (kind == Snapshot::kFullJIT) {
@@ -2189,14 +2222,14 @@ class FieldSerializationCluster : public SerializationCluster {
       WriteCompressedField(field, type);
       // Write out the initializer function and initial value if not in AOT.
       WriteCompressedField(field, initializer_function);
-      if (kind != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(kind)) {
         WriteCompressedField(field, guarded_list_length);
       }
       if (kind == Snapshot::kFullJIT) {
         WriteCompressedField(field, dependent_code);
       }
 
-      if (kind != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(kind)) {
         s->WriteTokenPosition(field->untag()->token_pos_);
         s->WriteTokenPosition(field->untag()->end_token_pos_);
         s->WriteCid(field->untag()->guarded_cid_);
@@ -2241,7 +2274,7 @@ class FieldDeserializationCluster : public DeserializationCluster {
       Deserializer::InitializeHeader(field, kFieldCid, Field::InstanceSize());
       d.ReadFromTo(field);
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(d_->kind() != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(d_->kind()));
       field->untag()->guarded_list_length_ = static_cast<SmiPtr>(d.ReadRef());
       if (kind == Snapshot::kFullJIT) {
         field->untag()->dependent_code_ =
@@ -2342,7 +2375,7 @@ class ScriptSerializationCluster : public SerializationCluster {
       ScriptPtr script = objects_[i];
       AutoTraceObjectName(script, script->untag()->url());
       WriteFromTo(script);
-      if (s->kind() != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(s->kind())) {
         // Clear out the max position cache in snapshots to ensure no
         // differences in the snapshot due to triggering caching vs. not.
         int32_t written_flags =
@@ -2422,7 +2455,7 @@ class LibrarySerializationCluster : public SerializationCluster {
       s->Write<uint16_t>(lib->untag()->num_imports_);
       s->Write<int8_t>(lib->untag()->load_state_);
       s->Write<uint8_t>(lib->untag()->flags_);
-      if (s->kind() != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(s->kind())) {
         s->Write<uint32_t>(lib->untag()->kernel_library_index_);
       }
     }
@@ -2459,9 +2492,33 @@ class LibraryDeserializationCluster : public DeserializationCluster {
       lib->untag()->flags_ =
           UntaggedLibrary::InFullSnapshotBit::update(true, d.Read<uint8_t>());
 #if !defined(DART_PRECOMPILED_RUNTIME)
-      ASSERT(d_->kind() != Snapshot::kFullAOT);
+      ASSERT(!IsAotSnapshotKind(d_->kind()));
       lib->untag()->kernel_library_index_ = d.Read<uint32_t>();
 #endif
+    }
+  }
+
+  void PostLoad(Deserializer* d, const Array& refs) override {
+    if (d->kind() != Snapshot::kFullAOTModule) return;
+    // Module libraries are freshly deserialized with native_entry_resolver_
+    // set to nullptr. For SDK libraries (dart:core, dart:math, etc.) that also
+    // exist in the host program, copy the resolver from the matching host
+    // Library so that bootstrap natives (e.g. Object_toString) remain
+    // callable when invoked through module-compiled code.
+    Thread* thread = d->thread();
+    Library& module_lib = Library::Handle(d->zone());
+    Library& host_lib = Library::Handle(d->zone());
+    String& url = String::Handle(d->zone());
+    for (intptr_t i = start_index_, n = stop_index_; i < n; i++) {
+      module_lib ^= refs.At(i);
+      url = module_lib.url();
+      host_lib = Library::LookupLibrary(thread, url);
+      if (!host_lib.IsNull()) {
+        module_lib.set_native_entry_resolver(host_lib.native_entry_resolver());
+        module_lib.set_native_entry_symbol_resolver(
+            host_lib.native_entry_symbol_resolver());
+        module_lib.set_ffi_native_resolver(host_lib.ffi_native_resolver());
+      }
     }
   }
 };
@@ -2622,7 +2679,7 @@ class CodeSerializationCluster : public SerializationCluster {
     // the pool for references to other code objects (which might reside
     // in the current loading unit).
     ObjectPoolPtr pool = code->untag()->object_pool_;
-    if (s->kind() == Snapshot::kFullAOT) {
+    if (IsAotSnapshotKind(s->kind())) {
       TracePool(s, pool, /*only_call_targets=*/is_deferred);
     } else {
       if (s->InCurrentLoadingUnitOrRoot(pool)) {
@@ -2636,7 +2693,7 @@ class CodeSerializationCluster : public SerializationCluster {
       s->Push(code->untag()->deopt_info_array_);
       s->Push(code->untag()->static_calls_target_table_);
       s->Push(code->untag()->compressed_stackmaps_);
-    } else if (s->kind() == Snapshot::kFullAOT) {
+    } else if (IsAotSnapshotKind(s->kind())) {
       // Note: we don't trace compressed_stackmaps_ because we are going to emit
       // a separate mapping table into RO data which is not going to be a real
       // heap object.
@@ -2671,7 +2728,7 @@ class CodeSerializationCluster : public SerializationCluster {
     }
 
     if (Code::IsDiscarded(code)) {
-      ASSERT(s->kind() == Snapshot::kFullAOT && FLAG_dwarf_stack_traces_mode &&
+      ASSERT(IsAotSnapshotKind(s->kind()) && FLAG_dwarf_stack_traces_mode &&
              !FLAG_retain_code_objects);
       // Only object pool and static call table entries and the compressed
       // stack maps should be pushed.
@@ -2812,7 +2869,7 @@ class CodeSerializationCluster : public SerializationCluster {
   void WriteAlloc(Serializer* s) {
     const intptr_t non_discarded_count = NonDiscardedCodeCount();
     const intptr_t count = objects_.length();
-    ASSERT(count == non_discarded_count || (s->kind() == Snapshot::kFullAOT));
+    ASSERT(count == non_discarded_count || (IsAotSnapshotKind(s->kind())));
 
     first_ref_ = s->next_ref_index();
     s->WriteUnsigned(non_discarded_count);
@@ -2878,7 +2935,7 @@ class CodeSerializationCluster : public SerializationCluster {
     if (pointer_offsets_length != 0) {
       FATAL("Cannot serialize code with embedded pointers");
     }
-    if (kind == Snapshot::kFullAOT && Code::IsDisabled(code)) {
+    if (IsAotSnapshotKind(kind) && Code::IsDisabled(code)) {
       // Disabled code is fatal in AOT since we cannot recompile.
       s->UnexpectedObject(code, "Disabled code");
     }
@@ -2899,7 +2956,7 @@ class CodeSerializationCluster : public SerializationCluster {
     if (FLAG_write_v8_snapshot_profile_to != nullptr) {
       // If we are writing V8 snapshot profile then attribute references going
       // through the object pool and static calls to the code object itself.
-      if (kind == Snapshot::kFullAOT &&
+      if (IsAotSnapshotKind(kind) &&
           code->untag()->object_pool_ != ObjectPool::null()) {
         ObjectPoolPtr pool = code->untag()->object_pool_;
         // Non-empty per-code object pools should not be reachable in this mode.
@@ -2924,7 +2981,7 @@ class CodeSerializationCluster : public SerializationCluster {
       ASSERT(s->bytes_written() == bytes_written);
       // Only write instructions, compressed stackmaps and state bits
       // for the discarded Code objects.
-      ASSERT(kind == Snapshot::kFullAOT && FLAG_dwarf_stack_traces_mode &&
+      ASSERT(IsAotSnapshotKind(kind) && FLAG_dwarf_stack_traces_mode &&
              !FLAG_retain_code_objects);
 #if defined(DART_PRECOMPILER)
       if (FLAG_write_v8_snapshot_profile_to != nullptr) {
@@ -2939,7 +2996,7 @@ class CodeSerializationCluster : public SerializationCluster {
 
     // No need to write object pool out if we are producing full AOT
     // snapshot with bare instructions.
-    if (kind != Snapshot::kFullAOT) {
+    if (!IsAotSnapshotKind(kind)) {
       if (s->InCurrentLoadingUnitOrRoot(code->untag()->object_pool_)) {
         WriteField(code, object_pool_);
       } else {
@@ -3065,7 +3122,7 @@ class CodeDeserializationCluster : public DeserializationCluster {
       ASSERT(d->kind() == Snapshot::kFullJIT);
       code->untag()->object_pool_ = static_cast<ObjectPoolPtr>(d->ReadRef());
 #else
-      ASSERT(d->kind() == Snapshot::kFullAOT);
+      ASSERT(IsAotSnapshotKind(d->kind()));
       // There is a single global pool.
       code->untag()->object_pool_ = ObjectPool::null();
 #endif
@@ -3080,7 +3137,7 @@ class CodeDeserializationCluster : public DeserializationCluster {
       code->untag()->compressed_stackmaps_ =
           static_cast<CompressedStackMapsPtr>(d->ReadRef());
 #else
-      ASSERT(d->kind() == Snapshot::kFullAOT);
+      ASSERT(IsAotSnapshotKind(d->kind()));
       code->untag()->compressed_stackmaps_ = CompressedStackMaps::null();
 #endif
       code->untag()->inlined_id_to_function_ =
@@ -3155,7 +3212,7 @@ class ObjectPoolSerializationCluster : public SerializationCluster {
     ObjectPoolPtr pool = ObjectPool::RawCast(object);
     objects_.Add(pool);
 
-    if (s->kind() != Snapshot::kFullAOT) {
+    if (!IsAotSnapshotKind(s->kind())) {
       const intptr_t length = pool->untag()->length_;
       uint8_t* entry_bits = pool->untag()->entry_bits();
       for (intptr_t i = 0; i < length; i++) {
@@ -3181,7 +3238,7 @@ class ObjectPoolSerializationCluster : public SerializationCluster {
   }
 
   void WriteFill(Serializer* s) {
-    bool weak = s->kind() == Snapshot::kFullAOT;
+    bool weak = IsAotSnapshotKind(s->kind());
 
     const intptr_t count = objects_.length();
     for (intptr_t i = 0; i < count; i++) {
@@ -3343,7 +3400,7 @@ class WeakSerializationReferenceSerializationCluster
   ~WeakSerializationReferenceSerializationCluster() {}
 
   void Trace(Serializer* s, ObjectPtr object) {
-    ASSERT(s->kind() == Snapshot::kFullAOT);
+    ASSERT(IsAotSnapshotKind(s->kind()));
     objects_.Add(WeakSerializationReference::RawCast(object));
   }
 
@@ -3713,7 +3770,7 @@ class RODataDeserializationCluster
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (!table_.IsNull()) {
+    if (ShouldInstallCanonicalTable(d)) {
       auto object_store = d->isolate_group()->object_store();
       VerifyCanonicalSet(d, refs,
                          WeakArray::Handle(object_store->symbol_table()));
@@ -4080,7 +4137,7 @@ class ICDataSerializationCluster : public SerializationCluster {
       ICDataPtr ic = objects_[i];
       AutoTraceObjectName(ic, ic->untag()->target_name_);
       WriteFromTo(ic);
-      if (kind != Snapshot::kFullAOT) {
+      if (!IsAotSnapshotKind(kind)) {
         NOT_IN_PRECOMPILED(s->Write<int32_t>(ic->untag()->deopt_id_));
       }
       s->Write<uint32_t>(ic->untag()->state_bits_);
@@ -4827,7 +4884,7 @@ class TypeDeserializationCluster
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (!table_.IsNull()) {
+    if (ShouldInstallCanonicalTable(d)) {
       auto object_store = d->isolate_group()->object_store();
       VerifyCanonicalSet(d, refs,
                          Array::Handle(object_store->canonical_types()));
@@ -4943,7 +5000,7 @@ class FunctionTypeDeserializationCluster
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (!table_.IsNull()) {
+    if (ShouldInstallCanonicalTable(d)) {
       auto object_store = d->isolate_group()->object_store();
       VerifyCanonicalSet(
           d, refs, Array::Handle(object_store->canonical_function_types()));
@@ -5054,7 +5111,7 @@ class RecordTypeDeserializationCluster
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (!table_.IsNull()) {
+    if (ShouldInstallCanonicalTable(d)) {
       auto object_store = d->isolate_group()->object_store();
       VerifyCanonicalSet(d, refs,
                          Array::Handle(object_store->canonical_record_types()));
@@ -5171,7 +5228,7 @@ class TypeParameterDeserializationCluster
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (!table_.IsNull()) {
+    if (ShouldInstallCanonicalTable(d)) {
       auto object_store = d->isolate_group()->object_store();
       VerifyCanonicalSet(
           d, refs, Array::Handle(object_store->canonical_type_parameters()));
@@ -5277,7 +5334,7 @@ class ClosureDeserializationCluster
   void PostLoad(Deserializer* d, const Array& refs) override {
     // We only cache the entry point in bare instructions mode (as we need
     // to load the function anyway otherwise).
-    ASSERT(d->kind() == Snapshot::kFullAOT);
+    ASSERT(IsAotSnapshotKind(d->kind()));
     auto& closure = Closure::Handle(d->zone());
     auto& func = Function::Handle(d->zone());
     for (intptr_t i = start_index_, n = stop_index_; i < n; i++) {
@@ -6782,7 +6839,7 @@ class StringDeserializationCluster
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
-    if (!table_.IsNull()) {
+    if (ShouldInstallCanonicalTable(d)) {
       auto object_store = d->isolate_group()->object_store();
       VerifyCanonicalSet(d, refs,
                          WeakArray::Handle(object_store->symbol_table()));
@@ -7065,7 +7122,7 @@ class ProgramSerializationRoots : public SerializationRoots {
         object_store_(object_store),
         snapshot_kind_(snapshot_kind) {
 #define ONLY_IN_AOT(code)                                                      \
-  if (snapshot_kind_ == Snapshot::kFullAOT) {                                  \
+  if (IsAotSnapshotKind(snapshot_kind_)) {                                     \
     code                                                                       \
   }
 #define SAVE_AND_RESET_ROOT(name, Type, init)                                  \
@@ -7080,7 +7137,7 @@ class ProgramSerializationRoots : public SerializationRoots {
   }
   ~ProgramSerializationRoots() {
 #define ONLY_IN_AOT(code)                                                      \
-  if (snapshot_kind_ == Snapshot::kFullAOT) {                                  \
+  if (IsAotSnapshotKind(snapshot_kind_)) {                                     \
     code                                                                       \
   }
 #define RESTORE_ROOT(name, Type, init)                                         \
@@ -7127,7 +7184,7 @@ class ProgramSerializationRoots : public SerializationRoots {
 
     dispatch_table_entries_ = object_store_->dispatch_table_code_entries();
     // We should only have a dispatch table in precompiled mode.
-    ASSERT(dispatch_table_entries_.IsNull() || s->kind() == Snapshot::kFullAOT);
+    ASSERT(dispatch_table_entries_.IsNull() || IsAotSnapshotKind(s->kind()));
 
 #if defined(DART_PRECOMPILER)
     // We treat the dispatch table as a root object and trace the Code objects
@@ -7267,6 +7324,98 @@ class ProgramDeserializationRoots : public DeserializationRoots {
 
  private:
   ObjectStore* object_store_;
+};
+
+// DeserializationRoots for kFullAOTModule snapshots.
+// Reads into a module-specific ObjectStore and extends the IsolateGroup's
+// dispatch table to cover module class CIDs.
+class ModuleDeserializationRoots : public DeserializationRoots {
+ public:
+  ModuleDeserializationRoots(ObjectStore* object_store,
+                             LoadedModule* loaded_module)
+      : object_store_(object_store), loaded_module_(loaded_module) {}
+
+  void AddBaseObjects(Deserializer* d) override {
+    // Modules are compiled independently of the host program. Their only
+    // guaranteed base is the VM isolate snapshot object table; using the host
+    // loading_units base objects would produce a mismatched reference mapping
+    // (different count or content) and corrupt object resolution.
+    const Array& base_objects = Object::vm_isolate_snapshot_object_table();
+    for (intptr_t i = kFirstReference; i < base_objects.Length(); i++) {
+      d->AddBaseObject(base_objects.At(i));
+    }
+  }
+
+  void ReadRoots(Deserializer* d) override {
+    // Read the module's object store fields (libraries, classes, etc.).
+    ObjectPtr* from = object_store_->from();
+    ObjectPtr* to = object_store_->to_snapshot(Snapshot::kFullAOTModule);
+    for (ObjectPtr* p = from; p <= to; p++) {
+      *p = d->ReadRef();
+    }
+
+    {
+      intptr_t n = d->ReadUnsigned();
+      loaded_module_->initial_field_count = n;
+      if (n > 0) {
+        loaded_module_->initial_field_values =
+            static_cast<ObjectPtr*>(malloc(n * sizeof(ObjectPtr)));
+        ASSERT(loaded_module_->initial_field_values != nullptr);
+        for (intptr_t i = 0; i < n; i++) {
+          loaded_module_->initial_field_values[i] = d->ReadRef();
+        }
+      }
+    }
+    {
+      intptr_t n_shared = d->ReadUnsigned();
+      loaded_module_->shared_initial_field_count = n_shared;
+      if (n_shared > 0) {
+        loaded_module_->shared_initial_field_values =
+            static_cast<ObjectPtr*>(malloc(n_shared * sizeof(ObjectPtr)));
+        ASSERT(loaded_module_->shared_initial_field_values != nullptr);
+        for (intptr_t i = 0; i < n_shared; i++) {
+          loaded_module_->shared_initial_field_values[i] = d->ReadRef();
+        }
+      }
+    }
+
+    // Read and install the module's dispatch table (extends host coverage).
+    d->ReadModuleDispatchTable();
+  }
+
+  void PostLoad(Deserializer* d, const Array& refs) override {
+    intptr_t class_count = 0;
+    Object& obj = Object::Handle(d->zone());
+    for (intptr_t i = 0; i < refs.Length(); i++) {
+      obj = refs.At(i);
+      if (obj.IsClass()) class_count++;
+    }
+    loaded_module_->class_object_count = class_count;
+    if (class_count > 0) {
+      loaded_module_->classes =
+          static_cast<ObjectPtr*>(malloc(class_count * sizeof(ObjectPtr)));
+      ASSERT(loaded_module_->classes != nullptr);
+      intptr_t class_index = 0;
+      for (intptr_t i = 0; i < refs.Length(); i++) {
+        obj = refs.At(i);
+        if (obj.IsClass()) {
+          loaded_module_->classes[class_index++] = obj.ptr();
+        }
+      }
+      ASSERT(class_index == class_count);
+    }
+
+
+    // Refresh class sizes for any new module classes now in the shared table.
+    d->isolate_group()->class_table()->CopySizesFromClassObjects();
+    d->heap()->old_space()->EvaluateAfterLoading();
+  }
+
+ private:
+  ObjectStore* object_store_;
+  LoadedModule* loaded_module_;
+
+  DISALLOW_COPY_AND_ASSIGN(ModuleDeserializationRoots);
 };
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
@@ -8004,7 +8153,7 @@ SerializationCluster* Serializer::NewClusterForClass(intptr_t cid,
       return new (Z) DeltaEncodedTypedDataSerializationCluster();
     case kWeakSerializationReferenceCid:
 #if defined(DART_PRECOMPILER)
-      ASSERT(kind_ == Snapshot::kFullAOT);
+      ASSERT(IsAotSnapshotKind(kind_));
       return new (Z) WeakSerializationReferenceSerializationCluster();
 #endif
     default:
@@ -8153,7 +8302,7 @@ void Serializer::PrepareInstructions(
   }
 
 #if defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_IA32)
-  if (kind() == Snapshot::kFullAOT) {
+  if (IsAotSnapshotKind(kind())) {
     // Group the code objects whose instructions are not being deferred in this
     // snapshot unit in the order they will be written: first the code objects
     // encountered for this first time in this unit being written by the
@@ -8774,7 +8923,7 @@ static constexpr intptr_t kDispatchTableIndexBase = kDispatchTableMaxRepeat + 1;
 
 void Serializer::WriteDispatchTable(const Array& entries) {
 #if defined(DART_PRECOMPILER)
-  if (kind() != Snapshot::kFullAOT) return;
+  if (!IsAotSnapshotKind(kind())) return;
 
   // Create an artificial node to which the bytes should be attributed. We
   // don't attribute them to entries.ptr(), as we don't want to attribute the
@@ -9002,7 +9151,12 @@ Deserializer::~Deserializer() {
 
 DeserializationCluster* Deserializer::ReadCluster() {
   const uint32_t tags = Read<uint32_t>();
-  const intptr_t cid = UntaggedObject::ClassIdTag::decode(tags);
+  intptr_t cid = UntaggedObject::ClassIdTag::decode(tags);
+  // Remap user-class CIDs for module snapshots so module classes occupy fresh
+  // CIDs above the host program's existing classes.
+  if (cid_offset_ != 0 && cid >= kNumPredefinedCids) {
+    cid += cid_offset_;
+  }
   const bool is_canonical = UntaggedObject::CanonicalBit::decode(tags);
   const bool is_immutable = UntaggedObject::ImmutableBit::decode(tags);
   Zone* Z = zone_;
@@ -9289,6 +9443,98 @@ void Deserializer::ReadDispatchTable(
 #endif
 }
 
+void Deserializer::ReadModuleDispatchTable() {
+#if defined(DART_PRECOMPILED_RUNTIME)
+  const intptr_t module_length = stream_.ReadUnsigned();
+  if (module_length == 0) return;
+
+  stream_.ReadUnsigned();  // first_code_id (not needed for the module table)
+
+  auto const IG = isolate_group();
+  auto code = IG->object_store()->dispatch_table_null_error_stub();
+  ASSERT(code != Code::null());
+  uword null_entry = Code::EntryPointOf(code);
+
+  // Decode the module dispatch table into a temporary buffer.
+  uword* module_entries = zone_->Alloc<uword>(module_length);
+  uword value = null_entry;
+  uword recent[kDispatchTableRecentCount] = {0};
+  intptr_t recent_index = 0;
+  intptr_t repeat_count = 0;
+  for (intptr_t i = 0; i < module_length; i++) {
+    if (repeat_count > 0) {
+      module_entries[i] = value;
+      repeat_count--;
+      continue;
+    }
+    auto const encoded = stream_.Read<intptr_t>();
+    if (encoded == 0) {
+      value = null_entry;
+    } else if (encoded < 0) {
+      intptr_t r = ~encoded;
+      ASSERT(r < kDispatchTableRecentCount);
+      value = recent[r];
+    } else if (encoded <= kDispatchTableMaxRepeat) {
+      repeat_count = encoded - 1;
+    } else {
+      const intptr_t code_index = encoded - kDispatchTableIndexBase;
+      value = GetEntryPointByCodeIndex(code_index);
+      recent[recent_index] = value;
+      recent_index = (recent_index + 1) & kDispatchTableRecentMask;
+    }
+    module_entries[i] = value;
+  }
+  ASSERT(repeat_count == 0);
+
+  if (cid_offset_ == 0) {
+    // No CID remapping: the module's table already covers the right CIDs.
+    // (Host has no user classes, or module was compiled with matching CIDs.)
+    auto* table = new DispatchTable(module_length);
+    memmove(table->array(), module_entries, module_length * sizeof(uword));
+    IG->set_dispatch_table(table);
+    return;
+  }
+
+  // CID remapping is active. Build a combined dispatch table:
+  //   [0 .. cids_before-1]         — host entries (predefined + host user classes)
+  //   [cids_before .. new_length-1] — module user class entries (remapped from
+  //                                   [kNumPredefinedCids .. module_length-1])
+  //
+  // cids_before = kNumPredefinedCids + cid_offset_
+  // new_length  = cids_before + (module_length - kNumPredefinedCids)
+  //             = cid_offset_ + module_length
+  const intptr_t cids_before = kNumPredefinedCids + cid_offset_;
+  const intptr_t new_length = cid_offset_ + module_length;
+  auto* table = new DispatchTable(new_length);
+  uword* new_arr = table->array();
+
+  // Initialise everything to null_entry.
+  for (intptr_t i = 0; i < new_length; i++) {
+    new_arr[i] = null_entry;
+  }
+
+  // Copy host entries for [0 .. cids_before-1].
+  if (DispatchTable* host_table = IG->dispatch_table()) {
+    const intptr_t copy_count =
+        Utils::Minimum(host_table->length(), cids_before);
+    memmove(new_arr, host_table->array(), copy_count * sizeof(uword));
+  } else {
+    // No host dispatch table yet; copy from the module's predefined range.
+    memmove(new_arr, module_entries,
+            Utils::Minimum(module_length, cids_before) * sizeof(uword));
+  }
+
+  // Place module user-class entries at the remapped positions.
+  const intptr_t module_user_count = module_length - kNumPredefinedCids;
+  if (module_user_count > 0) {
+    memmove(new_arr + cids_before, module_entries + kNumPredefinedCids,
+            module_user_count * sizeof(uword));
+  }
+
+  IG->set_dispatch_table(table);
+#endif
+}
+
 ApiErrorPtr Deserializer::VerifyImageAlignment() {
   if (image_reader_ != nullptr) {
     return image_reader_->VerifyAlignment();
@@ -9509,7 +9755,12 @@ void Deserializer::EndInstructions() {
   }
   if ((tables.Length() == 0) ||
       (tables.At(tables.Length() - 1) != instructions_table_.ptr())) {
-    ASSERT((!is_non_root_unit_ && tables.Length() == 0) ||
+    // Root-unit snapshots start with an empty table list; deferred units
+    // require the root unit's table to be present first. Module snapshots
+    // are root-unit snapshots loaded after the host program, so they
+    // legitimately append to a non-empty list.
+    ASSERT((!is_non_root_unit_ &&
+            (tables.Length() == 0 || kind_ == Snapshot::kFullAOTModule)) ||
            (is_non_root_unit_ && tables.Length() > 0));
     tables.Add(instructions_table_, Heap::kOld);
   }
@@ -10050,6 +10301,65 @@ ApiErrorPtr FullSnapshotReader::ReadProgramSnapshot() {
   }
 
   InitializeBSS();
+
+  return ApiError::null();
+}
+
+ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
+                                                   intptr_t* out_module_id) {
+  ASSERT(kind_ == Snapshot::kFullAOTModule);
+
+  SnapshotHeaderReader header_reader(kind_, buffer_, size_);
+  intptr_t offset = 0;
+  char* error =
+      header_reader.VerifyVersionAndFeatures(thread_->isolate_group(), &offset);
+  if (error != nullptr) {
+    return ConvertToApiError(error);
+  }
+
+  // Hold program_lock_ write for the full deserialization and registration.
+  // This blocks Library::LookupLibrary (which holds program_lock_ read) until
+  // the module is fully registered and visible.
+  SafepointWriteRwLocker ml(thread_, isolate_group()->program_lock());
+
+  Deserializer deserializer(thread_, kind_, buffer_, size_, data_image_,
+                            instructions_image_, /*is_non_root_unit=*/false,
+                            offset);
+  ApiErrorPtr api_error = deserializer.VerifyImageAlignment();
+  if (api_error != ApiError::null()) {
+    return api_error;
+  }
+
+  if (Snapshot::IncludesCode(kind_)) {
+    ASSERT(data_image_ != nullptr);
+    thread_->isolate_group()->SetupImagePage(data_image_,
+                                             /* is_executable */ false);
+    ASSERT(instructions_image_ != nullptr);
+    thread_->isolate_group()->SetupImagePage(instructions_image_,
+                                             /* is_executable */ true);
+  }
+
+  const intptr_t cids_before = isolate_group()->class_table()->NumCids();
+
+  // Shift all user-class CIDs read from the module snapshot upward so that
+  // module classes occupy fresh slots in the host's class table rather than
+  // colliding with existing host classes that happen to share the same
+  // compile-time CID (different compilations may assign CIDs differently).
+  deserializer.set_cid_offset(cids_before - kNumPredefinedCids);
+
+  auto* module_object_store = new ObjectStore();
+  ModuleDeserializationRoots roots(module_object_store, loaded_module);
+  deserializer.Deserialize(&roots);
+
+  loaded_module->object_store = module_object_store;
+  // The module dispatch table was installed on the IsolateGroup by
+  // ReadModuleDispatchTable; the old pointer is no longer valid.
+  loaded_module->dispatch_table = nullptr;
+  loaded_module->base_class_id = cids_before;
+  loaded_module->class_count =
+      isolate_group()->class_table()->NumCids() - cids_before;
+
+  *out_module_id = isolate_group()->AddLoadedModule(loaded_module);
 
   return ApiError::null();
 }

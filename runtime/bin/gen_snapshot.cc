@@ -80,6 +80,7 @@ enum SnapshotKind {
   kAppAOTElf,
   kAppAOTMachODylib,
   kVMAOTAssembly,
+  kAppAOTModule,  // ELF .so with kFullAOTModule header (dart:module)
 };
 static SnapshotKind snapshot_kind = kCore;
 
@@ -93,6 +94,7 @@ static const char* const kSnapshotKindNames[] = {
     "app-aot-elf",
     "app-aot-macho-dylib",
     "vm-aot-assembly",
+    "app-aot-module",
     nullptr,
     // clang-format on
 };
@@ -141,7 +143,7 @@ DEFINE_CB_OPTION(ProcessEnvironmentOption);
 static bool IsSnapshottingForPrecompilation() {
   return (snapshot_kind == kAppAOTAssembly) || (snapshot_kind == kAppAOTElf) ||
          (snapshot_kind == kAppAOTMachODylib) ||
-         (snapshot_kind == kVMAOTAssembly);
+         (snapshot_kind == kVMAOTAssembly) || (snapshot_kind == kAppAOTModule);
 }
 
 // clang-format off
@@ -187,6 +189,14 @@ static void PrintUsage() {
 "[--obfuscate]                                                               \n"
 "[--save-debugging-info=<debug-filename>]                                    \n"
 "[--save-obfuscation-map=<map-filename>]                                     \n"
+"<dart-kernel-file>                                                          \n"
+"                                                                            \n"
+"To create an AOT module snapshot (dart:module):                             \n"
+"--snapshot_kind=app-aot-module                                              \n"
+"--elf=<output-file>         (Linux / other: ELF .so)                       \n"
+"--macho=<output-file>       (macOS: MachO .dylib)                          \n"
+"[--strip]                                                                   \n"
+"[--save-debugging-info=<debug-filename>]                                    \n"
 "<dart-kernel-file>                                                          \n"
 "                                                                            \n"
 "AOT snapshots can be obfuscated: that is all identifiers will be renamed    \n"
@@ -276,6 +286,15 @@ static int ParseArguments(int argc,
         Syslog::PrintErr(
             "Building an AOT snapshot as ELF requires specifying "
             "an output file for --elf.\n\n");
+        return -1;
+      }
+      break;
+    }
+    case kAppAOTModule: {
+      if (elf_filename == nullptr && macho_filename == nullptr) {
+        Syslog::PrintErr(
+            "Building an AOT module snapshot requires specifying an output "
+            "file for --elf (Linux/other) or --macho (macOS).\n\n");
         return -1;
       }
       break;
@@ -664,14 +683,31 @@ static void CreateAndWritePrecompiledSnapshot() {
       next_callback = nullptr;
       create_multiple_callback = nullptr;
       break;
+    case kAppAOTModule:
+      // Loading-unit splitting is not supported for modules.
+      next_callback = nullptr;
+      create_multiple_callback = nullptr;
+      if (macho_filename != nullptr) {
+        kind_str = "MachO module dylib";
+        filename = macho_filename;
+        format = Dart_AotBinaryFormat_MachO_Dylib;
+      } else {
+        kind_str = "ELF module library";
+        filename = elf_filename;
+        format = Dart_AotBinaryFormat_Elf;
+      }
+      break;
     default:
       UNREACHABLE();
   }
   ASSERT(kind_str != nullptr);
   ASSERT(filename != nullptr);
 
-  // Precompile with specified embedder entry points
-  Dart_Handle result = Dart_Precompile();
+  // Precompile with specified embedder entry points.
+  // Modules have no main function; use the module-aware variant.
+  Dart_Handle result = (snapshot_kind == kAppAOTModule)
+                           ? Dart_PrecompileAsModule()
+                           : Dart_Precompile();
   CHECK_RESULT(result);
 
   if (strip && (debugging_info_filename == nullptr)) {
@@ -684,7 +720,24 @@ static void CreateAndWritePrecompiledSnapshot() {
   char* identifier = Utils::Basename(filename);
 
   // Create a precompiled snapshot.
-  if (loading_unit_manifest_filename == nullptr) {
+  if (snapshot_kind == kAppAOTModule) {
+    // Module snapshots are always written as a single ELF unit.
+    File* file = OpenFile(filename);
+    RefCntReleaseScope<File> rs(file);
+    File* debug_file = nullptr;
+    if (debugging_info_filename != nullptr) {
+      debug_file = OpenFile(debugging_info_filename);
+    }
+    result = Dart_CreateModuleAOTSnapshotAsBinary(
+        format, StreamingWriteCallback, file, strip, debug_file, identifier,
+        filename);
+    if (debug_file != nullptr) debug_file->Release();
+    if (identifier != nullptr) {
+      free(identifier);
+      identifier = nullptr;
+    }
+    CHECK_RESULT(result);
+  } else if (loading_unit_manifest_filename == nullptr) {
     File* file = OpenFile(filename);
     RefCntReleaseScope<File> rs(file);
     File* debug_file = nullptr;
@@ -822,6 +875,7 @@ static int CreateIsolateAndSnapshot(const CommandLineOptions& inputs) {
     case kAppAOTAssembly:
     case kAppAOTElf:
     case kAppAOTMachODylib:
+    case kAppAOTModule:
     case kVMAOTAssembly:
       CreateAndWritePrecompiledSnapshot();
       break;

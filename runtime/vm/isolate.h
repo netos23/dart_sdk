@@ -271,6 +271,7 @@ enum RootSlice : intptr_t {
   kSentinelFieldTable,
   kSharedInitialFieldTable,
   kSharedFieldTable,
+  kLoadedModules,
   kBackgroundCompiler,
   kDebugger,
   kReloadContext,
@@ -299,6 +300,8 @@ inline const char* RootSliceToCString(intptr_t slice) {
       return "shared initial field table";
     case kSharedFieldTable:
       return "shared field table";
+    case kLoadedModules:
+      return "loaded modules";
     case kBackgroundCompiler:
       return "background compiler";
     case kDebugger:
@@ -315,6 +318,35 @@ inline const char* RootSliceToCString(intptr_t slice) {
       return "?";
   }
 }
+
+// Runtime state for a dynamically loaded AOT module (dart:module).
+// Owned by IsolateGroup; protected by IsolateGroup::program_lock().
+struct LoadedModule {
+  void* dl_handle = nullptr;
+  const uint8_t* isolate_data = nullptr;
+  const uint8_t* isolate_instructions = nullptr;
+  // Module's own object store (libraries, classes, etc.). Owned.
+  ObjectStore* object_store = nullptr;
+  // Module static field initial values, indexed by Field::field_id().
+  ObjectPtr* initial_field_values = nullptr;
+  intptr_t initial_field_count = 0;
+  ObjectPtr* shared_initial_field_values = nullptr;
+  intptr_t shared_initial_field_count = 0;
+  // Class objects deserialized from the module snapshot.
+  ObjectPtr* classes = nullptr;
+  intptr_t class_object_count = 0;
+  // Extended dispatch table covering host + module class CIDs. Owned.
+  DispatchTable* dispatch_table = nullptr;
+  // First CID allocated to module classes in the shared class table.
+  intptr_t base_class_id = 0;
+  // Number of classes introduced by this module.
+  intptr_t class_count = 0;
+
+  LoadedModule() = default;
+  ~LoadedModule();
+  void VisitObjectPointers(ObjectPointerVisitor* visitor);
+  DISALLOW_COPY_AND_ASSIGN(LoadedModule);
+};
 
 // Represents an isolate group and is shared among all isolates within a group.
 class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
@@ -429,6 +461,13 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   void set_dispatch_table_snapshot_size(intptr_t size) {
     dispatch_table_snapshot_size_ = size;
   }
+
+  // Module management (dart:module). Callers must hold program_lock().
+  // Transfers ownership of |module|. Returns 0-based index.
+  intptr_t AddLoadedModule(LoadedModule* module);
+  // Returns nullptr if |index| is out of range.
+  LoadedModule* GetLoadedModule(intptr_t index) const;
+  intptr_t loaded_module_count() const;
 
   ClassTableAllocator* class_table_allocator() {
     return &class_table_allocator_;
@@ -959,6 +998,10 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   std::unique_ptr<DispatchTable> dispatch_table_;
   const uint8_t* dispatch_table_snapshot_ = nullptr;
   intptr_t dispatch_table_snapshot_size_ = 0;
+  // Loaded modules (dart:module). Protected by program_lock().
+  // Must not depend on ThreadState::Current()->zone() because IsolateGroup
+  // is constructed before a mutator thread/zone is guaranteed to exist.
+  MallocGrowableArray<LoadedModule*> loaded_modules_;
   ArrayPtr saved_unlinked_calls_;
   std::shared_ptr<FieldTable> initial_field_table_;
   std::shared_ptr<FieldTable> sentinel_field_table_;

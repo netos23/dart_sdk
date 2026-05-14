@@ -6602,7 +6602,31 @@ DART_EXPORT Dart_Handle Dart_Precompile() {
   CHECK_CALLBACK_STATE(T);
   CompilerState state(Thread::Current(), /*is_aot=*/true,
                       /*is_optimizing=*/true);
-  CHECK_ERROR_HANDLE(Precompiler::CompileAll());
+  CHECK_ERROR_HANDLE(Precompiler::CompileAll(/*is_module=*/false));
+  return Api::Success();
+#endif
+}
+
+DART_EXPORT Dart_Handle Dart_PrecompileAsModule() {
+#if defined(TARGET_ARCH_IA32)
+  return Api::NewError("AOT compilation is not supported on IA32.");
+#elif !defined(DART_PRECOMPILER)
+  return Api::NewError(
+      "This VM was built without support for AOT compilation.");
+#else
+  DARTSCOPE(Thread::Current());
+  API_TIMELINE_BEGIN_END(T);
+  if (!FLAG_precompiled_mode) {
+    return Api::NewError("Flag --precompilation was not specified.");
+  }
+  Dart_Handle result = Api::CheckAndFinalizePendingClasses(T);
+  if (Api::IsError(result)) {
+    return result;
+  }
+  CHECK_CALLBACK_STATE(T);
+  CompilerState state(Thread::Current(), /*is_aot=*/true,
+                      /*is_optimizing=*/true);
+  CHECK_ERROR_HANDLE(Precompiler::CompileAll(/*is_module=*/true));
   return Api::Success();
 #endif
 }
@@ -6623,7 +6647,8 @@ static void CreateAppAOTSnapshot(
     LoadingUnitSerializationData* unit,
     uint32_t program_hash,
     const char* identifier,
-    const char* path) {
+    const char* path,
+    Snapshot::Kind snapshot_kind = Snapshot::kFullAOT) {
   Thread* T = Thread::Current();
 
   NOT_IN_PRODUCT(TimelineBeginEndScope tbes2(T, Timeline::GetIsolateStream(),
@@ -6669,7 +6694,7 @@ static void CreateAppAOTSnapshot(
                                      callback, callback_data);
 
   auto const use_output_writer = [&](ImageWriter* image_writer) {
-    FullSnapshotWriter writer(Snapshot::kFullAOT, &vm_snapshot_data,
+    FullSnapshotWriter writer(snapshot_kind, &vm_snapshot_data,
                               &isolate_snapshot_data, image_writer,
                               image_writer);
 
@@ -6912,6 +6937,35 @@ Dart_CreateAppAOTSnapshotAsBinary(Dart_AotBinaryFormat format,
   CreateAppAOTSnapshot(callback, callback_data, strip, format,
                        debug_callback_data, nullptr, nullptr, 0, identifier,
                        path);
+
+  return Api::Success();
+#endif
+}
+
+DART_EXPORT Dart_Handle Dart_CreateModuleAOTSnapshotAsBinary(
+    Dart_AotBinaryFormat format,
+    Dart_StreamingWriteCallback callback,
+    void* callback_data,
+    bool strip,
+    void* debug_callback_data,
+    const char* identifier,
+    const char* path) {
+#if defined(TARGET_ARCH_IA32)
+  return Api::NewError("AOT compilation is not supported on IA32.");
+#elif !defined(DART_PRECOMPILER)
+  return Api::NewError(
+      "This VM was built without support for AOT compilation.");
+#else
+  DARTSCOPE(Thread::Current());
+  API_TIMELINE_DURATION(T);
+  CHECK_NULL(callback);
+
+  // Module snapshots are never split into loading units.
+  T->isolate_group()->object_store()->set_loading_units(Object::null_array());
+
+  CreateAppAOTSnapshot(callback, callback_data, strip, format,
+                       debug_callback_data, nullptr, nullptr, 0, identifier,
+                       path, Snapshot::kFullAOTModule);
 
   return Api::Success();
 #endif

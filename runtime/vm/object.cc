@@ -15391,7 +15391,8 @@ typedef UnorderedHashMap<LibraryLookupTraits> LibraryLookupMap;
 // Returns library with given url in current isolate, or nullptr.
 LibraryPtr Library::LookupLibrary(Thread* thread, const String& url) {
   Zone* zone = thread->zone();
-  ObjectStore* object_store = thread->isolate_group()->object_store();
+  IsolateGroup* ig = thread->isolate_group();
+  ObjectStore* object_store = ig->object_store();
 
   // Make sure the URL string has an associated hash code
   // to speed up the repeated equality checks.
@@ -15399,15 +15400,29 @@ LibraryPtr Library::LookupLibrary(Thread* thread, const String& url) {
 
   // Use the libraries map to lookup the library by URL.
   Library& lib = Library::Handle(zone);
-  SafepointReadRwLocker ml(thread, thread->isolate_group()->program_lock());
-  if (object_store->libraries_map() == Array::null()) {
-    return Library::null();
-  } else {
+  SafepointReadRwLocker ml(thread, ig->program_lock());
+
+  // Search host libraries first.
+  if (object_store->libraries_map() != Array::null()) {
     LibraryLookupMap map(object_store->libraries_map());
     lib ^= map.GetOrNull(url);
     ASSERT(map.Release().ptr() == object_store->libraries_map());
+    if (!lib.IsNull()) return lib.ptr();
   }
-  return lib.ptr();
+
+  // Cascade: search each loaded module's libraries.
+  const intptr_t module_count = ig->loaded_module_count();
+  for (intptr_t i = 0; i < module_count; i++) {
+    LoadedModule* m = ig->GetLoadedModule(i);
+    if (m == nullptr || m->object_store == nullptr) continue;
+    if (m->object_store->libraries_map() == Array::null()) continue;
+    LibraryLookupMap map(m->object_store->libraries_map());
+    lib ^= map.GetOrNull(url);
+    ASSERT(map.Release().ptr() == m->object_store->libraries_map());
+    if (!lib.IsNull()) return lib.ptr();
+  }
+
+  return Library::null();
 }
 
 bool Library::IsPrivate(const String& name) {

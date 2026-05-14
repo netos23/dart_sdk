@@ -1234,6 +1234,7 @@ class UntaggedClass : public UntaggedObject {
   CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
 #if defined(PRODUCT)
         return reinterpret_cast<CompressedObjectPtr*>(
             &invocation_dispatcher_cache_);
@@ -1323,6 +1324,7 @@ class UntaggedPatchClass : public UntaggedObject {
   CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<CompressedObjectPtr*>(&script_);
       case Snapshot::kFull:
       case Snapshot::kFullCore:
@@ -1526,6 +1528,7 @@ class UntaggedFunction : public UntaggedObject {
       case Snapshot::kFull:
       case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<CompressedObjectPtr*>(&data_);
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -1691,6 +1694,7 @@ class UntaggedField : public UntaggedObject {
       case Snapshot::kFullCore:
       case Snapshot::kFullJIT:
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<CompressedObjectPtr*>(&initializer_function_);
       case Snapshot::kNone:
       case Snapshot::kInvalid:
@@ -1752,6 +1756,7 @@ class alignas(8) UntaggedScript : public UntaggedObject {
   CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
 #if defined(PRODUCT)
         return reinterpret_cast<CompressedObjectPtr*>(&url_);
 #else
@@ -1828,6 +1833,7 @@ class UntaggedLibrary : public UntaggedObject {
   CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<CompressedObjectPtr*>(&exports_);
       case Snapshot::kFull:
       case Snapshot::kFullCore:
@@ -1889,6 +1895,7 @@ class UntaggedNamespace : public UntaggedObject {
   CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<CompressedObjectPtr*>(&target_);
       case Snapshot::kFull:
       case Snapshot::kFullCore:
@@ -2708,6 +2715,7 @@ class UntaggedICData : public UntaggedCallSiteData {
   ObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<ObjectPtr*>(&entries_);
       case Snapshot::kFull:
       case Snapshot::kFullCore:
@@ -2846,6 +2854,7 @@ class UntaggedLibraryPrefix : public UntaggedInstance {
   CompressedObjectPtr* to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFullAOT:
+      case Snapshot::kFullAOTModule:
         return reinterpret_cast<CompressedObjectPtr*>(&imports_);
       case Snapshot::kFull:
       case Snapshot::kFullCore:
