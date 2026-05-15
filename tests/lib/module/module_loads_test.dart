@@ -46,7 +46,7 @@ void main() {
   final value1 = module.getValue<String>('puppyName');
   print('Value: $value1');
 
-  // print('Default Hero: ${defaultHero.toString()}');
+  print('Default Hero: ${defaultHero.toString()}');
 
   // print('Result is ${defaultHero?.greet()}');
 

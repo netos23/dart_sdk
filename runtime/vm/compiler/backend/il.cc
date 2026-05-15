@@ -5430,12 +5430,12 @@ LocationSummary* DispatchTableCallInstr::MakeLocationSummary(Zone* zone,
 void DispatchTableCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   ASSERT(locs()->in(0).reg() == DispatchTableNullErrorABI::kClassIdReg);
   Array& arguments_descriptor = Array::ZoneHandle();
-  if (selector()->requires_args_descriptor) {
-    ArgumentsInfo args_info(type_args_len(), ArgumentCount(), ArgumentsSize(),
-                            argument_names());
-    arguments_descriptor = args_info.ToArgumentsDescriptor();
-  }
-  compiler->EmitDispatchTableCall(selector()->offset, arguments_descriptor);
+  ArgumentsInfo args_info(type_args_len(), ArgumentCount(), ArgumentsSize(),
+                          argument_names());
+  arguments_descriptor = args_info.ToArgumentsDescriptor();
+  const String& target_name = String::ZoneHandle(interface_target().name());
+  compiler->EmitDispatchTableCall(selector()->offset, arguments_descriptor,
+                                  target_name);
   compiler->EmitCallsiteMetadata(source(), DeoptId::kNone,
                                  UntaggedPcDescriptors::kOther, locs(), env());
   if (selector()->called_on_null && !selector()->on_null_interface) {

@@ -9531,6 +9531,32 @@ ApiErrorPtr Deserializer::VerifyImageAlignment() {
   return ApiError::null();
 }
 
+#if defined(DART_PRECOMPILED_RUNTIME)
+static void EnsureDispatchTableLengthForModule(Thread* thread,
+                                               intptr_t min_length) {
+  IsolateGroup* isolate_group = thread->isolate_group();
+  DispatchTable* old_table = isolate_group->dispatch_table();
+  if ((old_table != nullptr) && (old_table->length() >= min_length)) {
+    return;
+  }
+
+  const Code& null_error_stub = Code::Handle(
+      isolate_group->object_store()->dispatch_table_null_error_stub());
+  ASSERT(!null_error_stub.IsNull());
+  const uword null_entry = Code::EntryPointOf(null_error_stub.ptr());
+  const intptr_t old_length = old_table == nullptr ? 0 : old_table->length();
+  auto* new_table = new DispatchTable(min_length);
+  for (intptr_t i = 0; i < min_length; i++) {
+    new_table->SetEntryAt(i, null_entry);
+  }
+  for (intptr_t i = 0; i < old_length; i++) {
+    new_table->SetEntryAt(i, old_table->EntryAt(i));
+  }
+  isolate_group->set_dispatch_table(new_table);
+  thread->set_dispatch_table_array(new_table->ArrayOrigin());
+}
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
 void SnapshotHeaderReader::SetCoverageFromSnapshotFeatures(
     IsolateGroup* isolate_group) {
   auto prev_position = stream_.Position();
@@ -10344,6 +10370,22 @@ ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
   loaded_module->base_class_id = cids_before;
   loaded_module->class_count =
       isolate_group()->class_table()->NumCids() - cids_before;
+
+#if defined(DART_PRECOMPILED_RUNTIME)
+  intptr_t min_dispatch_table_length = 0;
+  if (loaded_module->dispatch_table != nullptr) {
+    min_dispatch_table_length = loaded_module->dispatch_table->length();
+  }
+  DispatchTable* dispatch_table = isolate_group()->dispatch_table();
+  if (dispatch_table != nullptr) {
+    min_dispatch_table_length = Utils::Maximum(
+        min_dispatch_table_length,
+        dispatch_table->length() + loaded_module->class_count);
+  }
+  if (min_dispatch_table_length > 0) {
+    EnsureDispatchTableLengthForModule(thread_, min_dispatch_table_length);
+  }
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
 
   *out_module_id = isolate_group()->AddLoadedModule(loaded_module);
 

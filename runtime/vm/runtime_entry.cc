@@ -406,6 +406,67 @@ DEFINE_RUNTIME_ENTRY(DispatchTableNullError, 1) {
   DoThrowNullError(thread, zone, /*is_param=*/false);
 }
 
+DEFINE_RUNTIME_ENTRY(DispatchTableMiss, 3) {
+#if defined(DART_PRECOMPILED_RUNTIME)
+  const Smi& cid = Smi::CheckedHandle(zone, arguments.ArgAt(0));
+  const String& target_name = String::CheckedHandle(zone, arguments.ArgAt(1));
+  const Array& arg_desc_array = Array::CheckedHandle(zone, arguments.ArgAt(2));
+  const intptr_t cid_value = cid.Value();
+  if (cid_value == kNullCid) {
+    arguments.SetReturn(Object::null_object());
+    return;
+  }
+
+  bool is_module_class = false;
+  IsolateGroup* isolate_group = thread->isolate_group();
+  {
+    SafepointReadRwLocker ml(thread, isolate_group->program_lock());
+    const intptr_t module_count = isolate_group->loaded_module_count();
+    for (intptr_t i = 0; i < module_count; i++) {
+      LoadedModule* module = isolate_group->GetLoadedModule(i);
+      if (module == nullptr) continue;
+      const intptr_t cid_start = module->base_class_id;
+      const intptr_t cid_end = cid_start + module->class_count;
+      if ((cid_start <= cid_value) && (cid_value < cid_end)) {
+        is_module_class = true;
+        break;
+      }
+    }
+  }
+  if (!is_module_class) {
+    arguments.SetReturn(Object::null_object());
+    return;
+  }
+
+  ClassTable* class_table = isolate_group->class_table();
+  if ((cid_value < 0) || (cid_value >= class_table->NumCids()) ||
+      !class_table->HasValidClassAt(cid_value)) {
+    arguments.SetReturn(Object::null_object());
+    return;
+  }
+
+  const Class& receiver_class = Class::Handle(zone, class_table->At(cid_value));
+  const Error& error =
+      Error::Handle(zone, receiver_class.EnsureIsFinalized(thread));
+  if (!error.IsNull()) {
+    Exceptions::PropagateError(error);
+    UNREACHABLE();
+  }
+
+  ArgumentsDescriptor args_desc(arg_desc_array);
+  const Function& target_function = Function::Handle(
+      zone, Resolver::ResolveDynamicForReceiverClass(
+                receiver_class, target_name, args_desc, /*allow_add=*/false));
+  if (target_function.IsNull() || !target_function.HasCode()) {
+    arguments.SetReturn(Object::null_object());
+    return;
+  }
+  arguments.SetReturn(target_function);
+#else
+  arguments.SetReturn(Object::null_object());
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+}
+
 DEFINE_RUNTIME_ENTRY(NullErrorWithSelector, 1) {
   const String& selector = String::CheckedHandle(zone, arguments.ArgAt(0));
   NullErrorHelper(zone, selector);

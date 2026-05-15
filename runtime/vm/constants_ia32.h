@@ -373,6 +373,7 @@ struct FfiAsyncCallbackSendStubABI {
 // declaration is only added for completeness.
 struct DispatchTableNullErrorABI {
   static constexpr Register kClassIdReg = EAX;
+  static constexpr Register kTargetNameReg = ECX;
 };
 
 typedef uint32_t RegList;

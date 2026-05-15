@@ -637,6 +637,7 @@ struct FfiAsyncCallbackSendStubABI {
 // null errors.
 struct DispatchTableNullErrorABI {
   static constexpr Register kClassIdReg = R0;
+  static constexpr Register kTargetNameReg = R1;
 };
 
 // TODO(regis): Add ABIs for type testing stubs and is-type test stubs instead

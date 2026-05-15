@@ -736,10 +736,31 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
 void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
   __ EnterStubFrame();
   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+  __ pushq(ARGS_DESC_REG);
+  __ PushRegister(DispatchTableNullErrorABI::kClassIdReg);
+  __ pushq(Immediate(0));  // Result slot.
+  __ PushRegister(DispatchTableNullErrorABI::kClassIdReg);
+  __ PushRegister(DispatchTableNullErrorABI::kTargetNameReg);
+  __ pushq(ARGS_DESC_REG);
+  __ CallRuntime(kDispatchTableMissRuntimeEntry, /*argument_count=*/3);
+  __ Drop(3);
+  __ popq(FUNCTION_REG);
+  __ PopRegister(DispatchTableNullErrorABI::kClassIdReg);
+  __ popq(ARGS_DESC_REG);
+  Label call_target_function;
+  __ CompareObject(FUNCTION_REG, NullObject());
+  __ j(NOT_EQUAL, &call_target_function);
   __ PushRegister(DispatchTableNullErrorABI::kClassIdReg);
   __ CallRuntime(kDispatchTableNullErrorRuntimeEntry, /*argument_count=*/1);
   // The NullError runtime entry does not return.
   __ Breakpoint();
+
+  __ Bind(&call_target_function);
+  __ RestoreCodePointer();
+  __ LeaveStubFrame();
+  __ LoadCompressed(
+      CODE_REG, FieldAddress(FUNCTION_REG, target::Function::code_offset()));
+  __ jmp(FieldAddress(FUNCTION_REG, target::Function::entry_point_offset()));
 }
 
 void StubCodeCompiler::GenerateRangeError(bool with_fpu_regs) {

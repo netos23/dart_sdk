@@ -55,6 +55,7 @@ namespace dart {
   V(NullCastError)                                                             \
   V(ArgumentNullError)                                                         \
   V(DispatchTableNullError)                                                    \
+  V(DispatchTableMiss)                                                         \
   V(ArgumentError)                                                             \
   V(ArgumentErrorUnboxedInt64)                                                 \
   V(IntegerDivisionByZeroException)                                            \

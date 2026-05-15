@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "platform/assert.h"
 #include "vm/globals.h"
 
 namespace dart {
@@ -17,6 +18,18 @@ class DispatchTable {
       : length_(length), array_(new uword[length]()) {}
 
   intptr_t length() const { return length_; }
+
+  uword EntryAt(intptr_t index) const {
+    ASSERT(index >= 0);
+    ASSERT(index < length_);
+    return array_[index];
+  }
+
+  void SetEntryAt(intptr_t index, uword entry) {
+    ASSERT(index >= 0);
+    ASSERT(index < length_);
+    array_[index] = entry;
+  }
 
   // The element of the dispatch table array to which the dispatch table
   // register points.

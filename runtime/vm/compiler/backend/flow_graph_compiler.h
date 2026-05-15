@@ -771,7 +771,8 @@ class FlowGraphCompiler : public ValueObject {
                        Code::EntryKind entry_kind = Code::EntryKind::kNormal);
 
   void EmitDispatchTableCall(int32_t selector_offset,
-                             const Array& arguments_descriptor);
+                             const Array& arguments_descriptor,
+                             const String& target_name);
 
   Condition EmitEqualityRegConstCompare(Register reg,
                                         const Object& obj,

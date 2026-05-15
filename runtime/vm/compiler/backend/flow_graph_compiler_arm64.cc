@@ -605,13 +605,17 @@ void FlowGraphCompiler::EmitOptimizedStaticCall(
 
 void FlowGraphCompiler::EmitDispatchTableCall(
     int32_t selector_offset,
-    const Array& arguments_descriptor) {
+    const Array& arguments_descriptor,
+    const String& target_name) {
   const auto cid_reg = DispatchTableNullErrorABI::kClassIdReg;
+  const auto target_name_reg = DispatchTableNullErrorABI::kTargetNameReg;
   ASSERT(CanCallDart());
   ASSERT(cid_reg != ARGS_DESC_REG);
-  if (!arguments_descriptor.IsNull()) {
-    __ LoadObject(ARGS_DESC_REG, arguments_descriptor);
-  }
+  ASSERT(target_name_reg != cid_reg);
+  ASSERT(target_name_reg != ARGS_DESC_REG);
+  ASSERT(!arguments_descriptor.IsNull());
+  __ LoadObject(ARGS_DESC_REG, arguments_descriptor);
+  __ LoadObject(target_name_reg, target_name);
   const intptr_t offset = selector_offset - DispatchTable::kOriginElement;
   CLOBBERS_LR({
     // Would like cid_reg to be available on entry to the target function

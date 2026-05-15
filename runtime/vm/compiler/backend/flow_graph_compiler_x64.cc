@@ -586,15 +586,20 @@ void FlowGraphCompiler::EmitOptimizedStaticCall(
 
 void FlowGraphCompiler::EmitDispatchTableCall(
     int32_t selector_offset,
-    const Array& arguments_descriptor) {
+    const Array& arguments_descriptor,
+    const String& target_name) {
   const auto cid_reg = DispatchTableNullErrorABI::kClassIdReg;
+  const auto target_name_reg = DispatchTableNullErrorABI::kTargetNameReg;
   ASSERT(CanCallDart());
   const Register table_reg = RAX;
   ASSERT(cid_reg != table_reg);
   ASSERT(cid_reg != ARGS_DESC_REG);
-  if (!arguments_descriptor.IsNull()) {
-    __ LoadObject(ARGS_DESC_REG, arguments_descriptor);
-  }
+  ASSERT(target_name_reg != table_reg);
+  ASSERT(target_name_reg != cid_reg);
+  ASSERT(target_name_reg != ARGS_DESC_REG);
+  ASSERT(!arguments_descriptor.IsNull());
+  __ LoadObject(ARGS_DESC_REG, arguments_descriptor);
+  __ LoadObject(target_name_reg, target_name);
   const intptr_t offset = (selector_offset - DispatchTable::kOriginElement) *
                           compiler::target::kWordSize;
   __ LoadDispatchTable(table_reg);

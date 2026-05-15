@@ -442,6 +442,7 @@ struct FfiAsyncCallbackSendStubABI {
 // null errors.
 struct DispatchTableNullErrorABI {
   static constexpr Register kClassIdReg = RCX;
+  static constexpr Register kTargetNameReg = RDX;
 };
 
 typedef uint32_t RegList;

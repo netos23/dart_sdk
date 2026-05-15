@@ -622,7 +622,8 @@ void FlowGraphCompiler::EmitOptimizedStaticCall(
 
 void FlowGraphCompiler::EmitDispatchTableCall(
     int32_t selector_offset,
-    const Array& arguments_descriptor) {
+    const Array& arguments_descriptor,
+    const String& target_name) {
   // Only generated with precompilation.
   UNREACHABLE();
 }
