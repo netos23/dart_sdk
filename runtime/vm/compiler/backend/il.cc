@@ -5419,11 +5419,13 @@ DispatchTableCallInstr* DispatchTableCallInstr::FromCall(
 LocationSummary* DispatchTableCallInstr::MakeLocationSummary(Zone* zone,
                                                              bool opt) const {
   const intptr_t kNumInputs = 1;
-  const intptr_t kNumTemps = 0;
+  const intptr_t kNumTemps = 1;
   LocationSummary* summary = new (zone)
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
   summary->set_in(
       0, Location::RegisterLocation(DispatchTableNullErrorABI::kClassIdReg));
+  summary->set_temp(
+      0, Location::RegisterLocation(DispatchTableNullErrorABI::kTargetNameReg));
   return MakeCallSummary(zone, this, summary);
 }
 

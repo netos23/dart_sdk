@@ -478,11 +478,12 @@ struct FfiAsyncCallbackSendStubABI {
 
 // ABI for DispatchTableNullErrorStub and consequently for all dispatch
 // table calls (though normal functions will not expect or use this
-// register). This ABI is added to distinguish memory corruption errors from
-// null errors.
+// register). kTargetNameReg must not be a Dart argument register because it is
+// live on normal dispatch table hits. This ABI is added to distinguish memory
+// corruption errors from null errors.
 struct DispatchTableNullErrorABI {
   static constexpr Register kClassIdReg = A2;
-  static constexpr Register kTargetNameReg = A0;
+  static constexpr Register kTargetNameReg = T1;
 };
 
 typedef uint32_t RegList;
