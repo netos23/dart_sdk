@@ -3042,6 +3042,9 @@ class Function : public Object {
 
   void PrintName(const NameFormattingParams& params,
                  BaseTextBuffer* printer) const;
+  // Helper for PrintJSONImpl and debugging to print all function properties
+  // and fields.
+  void PrintAllJSONProperties(JSONStream* stream, bool ref) const;
   StringPtr QualifiedScrubbedName() const;
   const char* QualifiedScrubbedNameCString() const;
   StringPtr QualifiedUserVisibleName() const;

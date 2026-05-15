@@ -10,16 +10,23 @@ void main() {
   final value = module.getValue<String>('puppyName');
   print('Value: $value');
 
-  // dynamic defaultHero = module.invokeConstructor(
-  //   className: 'Hero',
-  //   constructorName: 'defaultHero',
-  // );
-  //
-  //
-  //
-  // if(defaultHero == null){
-  //   print('Hero missed');
-  // }
+  dynamic defaultHero = module.invokeConstructor(
+    className: 'Hero',
+    constructorName: 'defaultHero',
+  );
+
+  if(defaultHero == null){
+    print('Hero missed');
+  }
+
+  dynamic simpleHero = module.invokeConstructor(
+    className: 'Hero',
+    positionalArgs: ['Spiderman'],
+  );
+
+  if(simpleHero == null){
+    print('Hero missed');
+  }
 
   final customHero = module.invokeConstructor(
     className: 'Hero',
@@ -43,10 +50,10 @@ void main() {
 
   // print('Result is ${defaultHero?.greet()}');
 
-  // final trinResult = module.invokeMethod<int>(
-  //   'trinHero',
-  //   positionalArgs: [defaultHero],
-  // );
+  final trinResult = module.invokeMethod<int>(
+    'trinHero',
+    positionalArgs: [defaultHero],
+  );
 
-  // print('Result is $trinResult');
+  print('Result is $trinResult');
 }

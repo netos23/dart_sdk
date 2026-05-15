@@ -282,6 +282,30 @@ static LoadedModule* GetLoadedModuleFromObject(Thread* thread,
   return m;
 }
 
+class ModuleDispatchTableScope : public ValueObject {
+ public:
+  ModuleDispatchTableScope(Thread* thread, LoadedModule* module)
+      : thread_(thread), saved_dispatch_table_(thread->dispatch_table_array()) {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    if (module->dispatch_table != nullptr) {
+      thread_->set_dispatch_table_array(module->dispatch_table->ArrayOrigin());
+    }
+#endif
+  }
+
+  ~ModuleDispatchTableScope() {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    thread_->set_dispatch_table_array(saved_dispatch_table_);
+#endif
+  }
+
+ private:
+  Thread* const thread_;
+  const uword* const saved_dispatch_table_;
+
+  DISALLOW_COPY_AND_ASSIGN(ModuleDispatchTableScope);
+};
+
 static ObjectPtr ModuleStaticFieldValue(LoadedModule* module,
                                         const Field& field) {
   ASSERT(field.is_static());
@@ -489,8 +513,11 @@ DEFINE_NATIVE_ENTRY(Module_getValue, 0, 2) {
       const Function& getter = Function::Handle(
           zone, LookupModuleStaticFunction(zone, lib, getter_name));
       if (!getter.IsNull()) {
-        const Object& result = Object::Handle(
-            zone, DartEntry::InvokeFunction(getter, Object::empty_array()));
+        Object& result = Object::Handle(zone);
+        {
+          ModuleDispatchTableScope dispatch_table_scope(thread, m);
+          result = DartEntry::InvokeFunction(getter, Object::empty_array());
+        }
         if (result.IsError()) {
           Exceptions::PropagateError(Error::Cast(result));
           UNREACHABLE();
@@ -498,11 +525,14 @@ DEFINE_NATIVE_ENTRY(Module_getValue, 0, 2) {
         return result.ptr();
       }
 
-      const Object& result =
-          Object::Handle(zone, lib.InvokeGetter(value_name,
-                                                /*check_is_entrypoint=*/false,
-                                                /*respect_reflectable=*/false,
-                                                /*for_invocation=*/true));
+      Object& result = Object::Handle(zone);
+      {
+        ModuleDispatchTableScope dispatch_table_scope(thread, m);
+        result = lib.InvokeGetter(value_name,
+                                  /*check_is_entrypoint=*/false,
+                                  /*respect_reflectable=*/false,
+                                  /*for_invocation=*/true);
+      }
       if (result.ptr() == Object::sentinel().ptr()) continue;
       if (result.IsError()) {
         Exceptions::PropagateError(Error::Cast(result));
@@ -550,18 +580,24 @@ DEFINE_NATIVE_ENTRY(Module_invokeMethod, 0, 5) {
         const Array& desc =
             Array::Handle(zone, ArgumentsDescriptor::NewBoxed(
                                     /*type_args_len=*/0, args.Length(), names));
-        const Object& result = Object::Handle(
-            zone, DartEntry::InvokeFunction(function, args, desc));
+        Object& result = Object::Handle(zone);
+        {
+          ModuleDispatchTableScope dispatch_table_scope(thread, m);
+          result = DartEntry::InvokeFunction(function, args, desc);
+        }
         if (result.IsError()) {
           Exceptions::PropagateError(Error::Cast(result));
           UNREACHABLE();
         }
         return result.ptr();
       }
-      const Object& result =
-          Object::Handle(zone, lib.Invoke(func_name, args, names,
-                                          /*check_is_entrypoint=*/false,
-                                          /*respect_reflectable=*/false));
+      Object& result = Object::Handle(zone);
+      {
+        ModuleDispatchTableScope dispatch_table_scope(thread, m);
+        result = lib.Invoke(func_name, args, names,
+                            /*check_is_entrypoint=*/false,
+                            /*respect_reflectable=*/false);
+      }
       if (result.IsError()) {
         Exceptions::PropagateError(Error::Cast(result));
         UNREACHABLE();
@@ -603,10 +639,13 @@ DEFINE_NATIVE_ENTRY(Module_invokeStaticMethod, 0, 6) {
           Array::Handle(zone, BuildArgArray(zone, pos_args, named_values));
       const Array& names =
           Array::Handle(zone, GrowableToArray(zone, arg_names_list));
-      const Object& result =
-          Object::Handle(zone, klass.Invoke(method_name, args, names,
-                                            /*check_is_entrypoint=*/false,
-                                            /*respect_reflectable=*/false));
+      Object& result = Object::Handle(zone);
+      {
+        ModuleDispatchTableScope dispatch_table_scope(thread, m);
+        result = klass.Invoke(method_name, args, names,
+                              /*check_is_entrypoint=*/false,
+                              /*respect_reflectable=*/false);
+      }
       if (result.IsError()) {
         Exceptions::PropagateError(Error::Cast(result));
         UNREACHABLE();
@@ -683,8 +722,6 @@ DEFINE_NATIVE_ENTRY(Module_invokeConstructor, 0, 6) {
       const Array& names =
           Array::Handle(zone, GrowableToArray(zone, arg_names_list));
 
- 	    OS::Print("Constructor sig:  '%s' \n", String::Handle(zone, ctor.InternalSignature()).ToMallocCString());
-
       if (ctor.IsGenerativeConstructor()) {
         const Instance& new_obj = Instance::Handle(zone, Instance::New(klass));
         args.SetAt(0, new_obj);
@@ -701,8 +738,11 @@ DEFINE_NATIVE_ENTRY(Module_invokeConstructor, 0, 6) {
         const Array& desc = Array::Handle(
             zone,
             ArgumentsDescriptor::NewBoxed(/*type_args_len=*/0, n_total, names));
-        const Object& result =
-            Object::Handle(zone, DartEntry::InvokeFunction(ctor, args, desc));
+        Object& result = Object::Handle(zone);
+        {
+          ModuleDispatchTableScope dispatch_table_scope(thread, m);
+          result = DartEntry::InvokeFunction(ctor, args, desc);
+        }
         if (result.IsError()) {
           Exceptions::PropagateError(Error::Cast(result));
           UNREACHABLE();
@@ -724,8 +764,11 @@ DEFINE_NATIVE_ENTRY(Module_invokeConstructor, 0, 6) {
         const Array& desc = Array::Handle(
             zone,
             ArgumentsDescriptor::NewBoxed(/*type_args_len=*/0, n_total, names));
-        const Object& result =
-            Object::Handle(zone, DartEntry::InvokeFunction(ctor, args, desc));
+        Object& result = Object::Handle(zone);
+        {
+          ModuleDispatchTableScope dispatch_table_scope(thread, m);
+          result = DartEntry::InvokeFunction(ctor, args, desc);
+        }
         if (result.IsError()) {
           Exceptions::PropagateError(Error::Cast(result));
           UNREACHABLE();

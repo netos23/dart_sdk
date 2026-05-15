@@ -335,7 +335,8 @@ struct LoadedModule {
   // Class objects deserialized from the module snapshot.
   ObjectPtr* classes = nullptr;
   intptr_t class_object_count = 0;
-  // Extended dispatch table covering host + module class CIDs. Owned.
+  // Dispatch table compiled for this module. Activated while invoking module
+  // code because dispatch table selector offsets are snapshot-local. Owned.
   DispatchTable* dispatch_table = nullptr;
   // First CID allocated to module classes in the shared class table.
   intptr_t base_class_id = 0;

@@ -341,7 +341,7 @@ void Function::AddFunctionServiceId(const JSONObject& jsobj) const {
   jsobj.AddServiceId(*this);
 }
 
-void Function::PrintJSONImpl(JSONStream* stream, bool ref) const {
+void Function::PrintAllJSONProperties(JSONStream* stream, bool ref) const {
   Class& cls = Class::Handle(Owner());
   ASSERT(!cls.IsNull());
   Error& err = Error::Handle();
@@ -421,6 +421,10 @@ void Function::PrintJSONImpl(JSONStream* stream, bool ref) const {
       jsobj.AddProperty("_field", field);
     }
   }
+}
+
+void Function::PrintJSONImpl(JSONStream* stream, bool ref) const {
+  PrintAllJSONProperties(stream, ref);
 }
 
 void Function::PrintImplementationFieldsImpl(

@@ -784,10 +784,10 @@ class Deserializer : public ThreadStackResource {
                          const InstructionsTable& root_instruction_table,
                          intptr_t deferred_code_start_index,
                          intptr_t deferred_code_end_index);
-  // Reads a module dispatch table from the current stream position and
-  // installs it as the IsolateGroup's dispatch table, extending the host's
-  // coverage to include module class CIDs.
-  void ReadModuleDispatchTable();
+  // Reads a module dispatch table from the current stream position and stores
+  // it in |loaded_module|. Module snapshots are compiled independently, so
+  // their selector offsets are valid only while executing module code.
+  void ReadModuleDispatchTable(LoadedModule* loaded_module);
 
   intptr_t next_index() const { return next_ref_index_; }
   Heap* heap() const { return heap_; }
@@ -7379,8 +7379,9 @@ class ModuleDeserializationRoots : public DeserializationRoots {
       }
     }
 
-    // Read and install the module's dispatch table (extends host coverage).
-    d->ReadModuleDispatchTable();
+    // Read the module's dispatch table. It is activated only while invoking
+    // module code because selector offsets are local to the module snapshot.
+    d->ReadModuleDispatchTable(loaded_module_);
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
@@ -9443,8 +9444,9 @@ void Deserializer::ReadDispatchTable(
 #endif
 }
 
-void Deserializer::ReadModuleDispatchTable() {
+void Deserializer::ReadModuleDispatchTable(LoadedModule* loaded_module) {
 #if defined(DART_PRECOMPILED_RUNTIME)
+  ASSERT(loaded_module != nullptr);
   const intptr_t module_length = stream_.ReadUnsigned();
   if (module_length == 0) return;
 
@@ -9491,19 +9493,14 @@ void Deserializer::ReadModuleDispatchTable() {
     // (Host has no user classes, or module was compiled with matching CIDs.)
     auto* table = new DispatchTable(module_length);
     memmove(table->array(), module_entries, module_length * sizeof(uword));
-    IG->set_dispatch_table(table);
+    loaded_module->dispatch_table = table;
     return;
   }
 
-  // CID remapping is active. Build a combined dispatch table:
-  //   [0 .. cids_before-1]         — host entries (predefined + host user classes)
-  //   [cids_before .. new_length-1] — module user class entries (remapped from
-  //                                   [kNumPredefinedCids .. module_length-1])
-  //
-  // cids_before = kNumPredefinedCids + cid_offset_
-  // new_length  = cids_before + (module_length - kNumPredefinedCids)
-  //             = cid_offset_ + module_length
-  const intptr_t cids_before = kNumPredefinedCids + cid_offset_;
+  // CID remapping is active. Keep the module's original entries because module
+  // code uses module selector offsets for predefined SDK classes. Also mirror
+  // entries at +cid_offset_ so receiver CIDs remapped into the host class table
+  // can still hit module-compiled implementations.
   const intptr_t new_length = cid_offset_ + module_length;
   auto* table = new DispatchTable(new_length);
   uword* new_arr = table->array();
@@ -9513,25 +9510,17 @@ void Deserializer::ReadModuleDispatchTable() {
     new_arr[i] = null_entry;
   }
 
-  // Copy host entries for [0 .. cids_before-1].
-  if (DispatchTable* host_table = IG->dispatch_table()) {
-    const intptr_t copy_count =
-        Utils::Minimum(host_table->length(), cids_before);
-    memmove(new_arr, host_table->array(), copy_count * sizeof(uword));
-  } else {
-    // No host dispatch table yet; copy from the module's predefined range.
-    memmove(new_arr, module_entries,
-            Utils::Minimum(module_length, cids_before) * sizeof(uword));
+  memmove(new_arr, module_entries, module_length * sizeof(uword));
+  for (intptr_t i = 0; i < module_length; i++) {
+    if (module_entries[i] == null_entry) continue;
+    const intptr_t remapped_index = i + cid_offset_;
+    ASSERT(remapped_index < new_length);
+    if (new_arr[remapped_index] == null_entry) {
+      new_arr[remapped_index] = module_entries[i];
+    }
   }
 
-  // Place module user-class entries at the remapped positions.
-  const intptr_t module_user_count = module_length - kNumPredefinedCids;
-  if (module_user_count > 0) {
-    memmove(new_arr + cids_before, module_entries + kNumPredefinedCids,
-            module_user_count * sizeof(uword));
-  }
-
-  IG->set_dispatch_table(table);
+  loaded_module->dispatch_table = table;
 #endif
 }
 
@@ -10352,9 +10341,6 @@ ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
   deserializer.Deserialize(&roots);
 
   loaded_module->object_store = module_object_store;
-  // The module dispatch table was installed on the IsolateGroup by
-  // ReadModuleDispatchTable; the old pointer is no longer valid.
-  loaded_module->dispatch_table = nullptr;
   loaded_module->base_class_id = cids_before;
   loaded_module->class_count =
       isolate_group()->class_table()->NumCids() - cids_before;
