@@ -335,6 +335,7 @@ struct LoadedModule {
   const uint8_t* abi_data = nullptr;
   intptr_t abi_data_size = 0;
   ModuleAbiHeader abi_header;
+  ModuleAbiRuntimeIds abi_runtime_ids;
   // Module's own object store (libraries, classes, etc.). Owned.
   ObjectStore* object_store = nullptr;
   // Module static field initial values, indexed by Field::field_id().

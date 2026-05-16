@@ -193,6 +193,35 @@ const char* ModuleAbi::ReadHeader(const uint8_t* data, ModuleAbiHeader* out) {
   return nullptr;
 }
 
+const char* ModuleAbi::ReadRuntimeIds(const uint8_t* data,
+                                      const ModuleAbiHeader& header,
+                                      ModuleAbiRuntimeIds* out) {
+  ASSERT(out != nullptr);
+  ModuleAbiRuntimeIds runtime_ids;
+  if (header.payload_size == 0) {
+    *out = runtime_ids;
+    return nullptr;
+  }
+  if (data == nullptr) {
+    return "missing module ABI data";
+  }
+  if (header.payload_size < kRuntimeIdsSize) {
+    return "invalid module ABI runtime-id payload size";
+  }
+
+  const uint8_t* payload = data + header.header_size;
+  runtime_ids.private_class_count = ReadUint32LE(payload);
+  runtime_ids.private_selector_count = ReadUint32LE(payload + 4);
+  runtime_ids.dispatch_table_entry_count = ReadUint32LE(payload + 8);
+  runtime_ids.reserved = ReadUint32LE(payload + 12);
+  if (runtime_ids.reserved != 0) {
+    return "invalid module ABI runtime-id reserved field";
+  }
+
+  *out = runtime_ids;
+  return nullptr;
+}
+
 void ModuleAbi::WriteHeader(uint8_t* data,
                             uint64_t manifest_hash,
                             uint32_t payload_size) {
@@ -209,6 +238,18 @@ void ModuleAbi::WriteHeader(uint8_t* data,
   header.target_os = CurrentTargetOs();
   header.reserved = 0;
   WriteHeaderFields(data, header);
+}
+
+void ModuleAbi::WriteHeaderAndRuntimeIds(
+    uint8_t* data,
+    uint64_t manifest_hash,
+    const ModuleAbiRuntimeIds& runtime_ids) {
+  WriteHeader(data, manifest_hash, kRuntimeIdsSize);
+  uint8_t* payload = data + kHeaderSize;
+  WriteUint32LE(payload, runtime_ids.private_class_count);
+  WriteUint32LE(payload + 4, runtime_ids.private_selector_count);
+  WriteUint32LE(payload + 8, runtime_ids.dispatch_table_entry_count);
+  WriteUint32LE(payload + 12, runtime_ids.reserved);
 }
 
 const char* ModuleAbi::ValidateCompatibility(const ModuleAbiHeader& header,

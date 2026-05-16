@@ -189,6 +189,7 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
   const uint8_t* module_abi_data = reinterpret_cast<const uint8_t*>(
       Utils::ResolveSymbolInDynamicLibrary(dl_handle, kModuleAbiDataCSymbol));
   ModuleAbiHeader module_abi_header;
+  ModuleAbiRuntimeIds module_abi_runtime_ids;
   intptr_t module_abi_data_size = 0;
   if (module_abi_data == nullptr) {
     Utils::UnloadDynamicLibrary(dl_handle);
@@ -201,6 +202,12 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
     ThrowModuleSnapshotError(abi_error);
   }
   module_abi_data_size = module_abi_header.TotalSize();
+  abi_error = ModuleAbi::ReadRuntimeIds(module_abi_data, module_abi_header,
+                                        &module_abi_runtime_ids);
+  if (abi_error != nullptr) {
+    Utils::UnloadDynamicLibrary(dl_handle);
+    ThrowModuleSnapshotError(abi_error);
+  }
 
   const uint64_t host_abi_hash =
       thread->isolate_group()->module_abi_manifest_hash();
@@ -220,6 +227,7 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
   loaded->abi_data = module_abi_data;
   loaded->abi_data_size = module_abi_data_size;
   loaded->abi_header = module_abi_header;
+  loaded->abi_runtime_ids = module_abi_runtime_ids;
 
   intptr_t module_id = -1;
   {

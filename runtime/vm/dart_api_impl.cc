@@ -14,6 +14,7 @@
 #include "platform/unicode.h"
 #include "vm/app_snapshot.h"
 #include "vm/bytecode_reader.h"
+#include "vm/class_id.h"
 #include "vm/class_finalizer.h"
 #include "vm/compiler/jit/compiler.h"
 #include "vm/dart.h"
@@ -36,6 +37,7 @@
 #include "vm/message.h"
 #include "vm/message_handler.h"
 #include "vm/message_snapshot.h"
+#include "vm/module_abi.h"
 #include "vm/native_entry.h"
 #include "vm/native_symbol.h"
 #include "vm/object.h"
@@ -6641,6 +6643,34 @@ static constexpr intptr_t kAssemblyInitialSize = 512 * KB;
 static constexpr intptr_t kInitialSize = 2 * MB;
 static constexpr intptr_t kInitialDebugSize = 1 * MB;
 
+static uint32_t RuntimeIdCountToUint32(intptr_t count, const char* name) {
+  if (count < 0 ||
+      static_cast<uint64_t>(count) > static_cast<uint64_t>(0xffffffffu)) {
+    FATAL("Module ABI %s count is out of range: %" Pd, name, count);
+  }
+  return static_cast<uint32_t>(count);
+}
+
+static ModuleAbiRuntimeIds CurrentModuleAbiRuntimeIds(Thread* thread) {
+  IsolateGroup* isolate_group = thread->isolate_group();
+  ModuleAbiRuntimeIds runtime_ids;
+
+  runtime_ids.private_class_count = RuntimeIdCountToUint32(
+      isolate_group->class_table()->NumCids() - kNumPredefinedCids,
+      "private class");
+
+  const Array& dispatch_table_entries = Array::Handle(
+      thread->zone(),
+      isolate_group->object_store()->dispatch_table_code_entries());
+  runtime_ids.dispatch_table_entry_count =
+      RuntimeIdCountToUint32(dispatch_table_entries.IsNull()
+                                 ? 0
+                                 : dispatch_table_entries.Length(),
+                             "dispatch table entry");
+
+  return runtime_ids;
+}
+
 static void CreateAppAOTSnapshot(
     Dart_StreamingWriteCallback callback,
     void* callback_data,
@@ -6717,7 +6747,8 @@ static void CreateAppAOTSnapshot(
           FLAG_module_abi_manifest_hash != 0
               ? FLAG_module_abi_manifest_hash
               : T->isolate_group()->module_abi_manifest_hash();
-      image_writer->WriteModuleAbiData(manifest_hash);
+      image_writer->WriteModuleAbiData(manifest_hash,
+                                       CurrentModuleAbiRuntimeIds(T));
     }
     image_writer->Finalize();
   };

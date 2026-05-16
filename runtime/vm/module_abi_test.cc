@@ -32,6 +32,55 @@ UNIT_TEST_CASE(ModuleAbiReadHeader) {
   EXPECT_EQ(ModuleAbi::kHeaderSize + 3, header.TotalSize());
 }
 
+UNIT_TEST_CASE(ModuleAbiReadRuntimeIds) {
+  uint8_t data[ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsSize];
+  ModuleAbiRuntimeIds runtime_ids;
+  runtime_ids.private_class_count = 7;
+  runtime_ids.private_selector_count = 3;
+  runtime_ids.dispatch_table_entry_count = 19;
+  ModuleAbi::WriteHeaderAndRuntimeIds(data, kTestManifestHash, runtime_ids);
+
+  ModuleAbiHeader header;
+  EXPECT_NULLPTR(ModuleAbi::ReadHeader(data, &header));
+  EXPECT_EQ(static_cast<uint32_t>(ModuleAbi::kRuntimeIdsSize),
+            header.payload_size);
+  EXPECT_EQ(ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsSize,
+            header.TotalSize());
+
+  ModuleAbiRuntimeIds decoded;
+  EXPECT_NULLPTR(ModuleAbi::ReadRuntimeIds(data, header, &decoded));
+  EXPECT_EQ(static_cast<uint32_t>(7), decoded.private_class_count);
+  EXPECT_EQ(static_cast<uint32_t>(3), decoded.private_selector_count);
+  EXPECT_EQ(static_cast<uint32_t>(19), decoded.dispatch_table_entry_count);
+  EXPECT_EQ(static_cast<uint32_t>(0), decoded.reserved);
+}
+
+UNIT_TEST_CASE(ModuleAbiReadRuntimeIdsAllowsNoPayload) {
+  uint8_t data[ModuleAbi::kHeaderSize];
+  ModuleAbi::WriteHeader(data, kTestManifestHash);
+
+  ModuleAbiHeader header;
+  EXPECT_NULLPTR(ModuleAbi::ReadHeader(data, &header));
+
+  ModuleAbiRuntimeIds decoded;
+  EXPECT_NULLPTR(ModuleAbi::ReadRuntimeIds(data, header, &decoded));
+  EXPECT_EQ(static_cast<uint32_t>(0), decoded.private_class_count);
+  EXPECT_EQ(static_cast<uint32_t>(0), decoded.private_selector_count);
+  EXPECT_EQ(static_cast<uint32_t>(0), decoded.dispatch_table_entry_count);
+  EXPECT_EQ(static_cast<uint32_t>(0), decoded.reserved);
+}
+
+UNIT_TEST_CASE(ModuleAbiRejectsShortRuntimeIdsPayload) {
+  uint8_t data[ModuleAbi::kHeaderSize];
+  ModuleAbi::WriteHeader(data, kTestManifestHash, /*payload_size=*/1);
+
+  ModuleAbiHeader header;
+  EXPECT_NULLPTR(ModuleAbi::ReadHeader(data, &header));
+  ModuleAbiRuntimeIds decoded;
+  EXPECT_STREQ("invalid module ABI runtime-id payload size",
+               ModuleAbi::ReadRuntimeIds(data, header, &decoded));
+}
+
 UNIT_TEST_CASE(ModuleAbiRejectsInvalidMagic) {
   uint8_t data[ModuleAbi::kHeaderSize];
   ModuleAbi::WriteHeader(data, /*manifest_hash=*/0);

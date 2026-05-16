@@ -33,6 +33,7 @@ class BitsContainer;
 class Code;
 class Dwarf;
 class Instructions;
+struct ModuleAbiRuntimeIds;
 class Object;
 class SharedObjectWriter;
 
@@ -472,7 +473,9 @@ class ImageWriter : public ValueObject {
       static_cast<int>(ProgramSection::BuildId) + 1;
 
 #if defined(DART_PRECOMPILER)
-  virtual void WriteModuleAbiData(uint64_t manifest_hash) = 0;
+  virtual void WriteModuleAbiData(
+      uint64_t manifest_hash,
+      const ModuleAbiRuntimeIds& runtime_ids) = 0;
 
   // Returns a predetermined label for the given section in the VM isolate
   // (if vm is true) or application isolate (otherwise) section. Some sections
@@ -817,7 +820,8 @@ class AssemblyImageWriter : public ImageWriter {
                       bool strip = false,
                       SharedObjectWriter* debug_so = nullptr);
   virtual void Finalize();
-  virtual void WriteModuleAbiData(uint64_t manifest_hash);
+  virtual void WriteModuleAbiData(uint64_t manifest_hash,
+                                  const ModuleAbiRuntimeIds& runtime_ids);
 
  private:
   virtual void WriteBss(bool vm);
@@ -888,7 +892,8 @@ class BlobImageWriter : public ImageWriter {
 
   virtual void Finalize();
 #if defined(DART_PRECOMPILER)
-  virtual void WriteModuleAbiData(uint64_t manifest_hash);
+  virtual void WriteModuleAbiData(uint64_t manifest_hash,
+                                  const ModuleAbiRuntimeIds& runtime_ids);
 #endif
 
  private:

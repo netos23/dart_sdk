@@ -7419,6 +7419,18 @@ static void InitializeModuleLinkTables(LoadedModule* loaded_module) {
   loaded_module->class_id_bindings = empty;
 }
 
+static void ReserveModuleClassTableSlots(IsolateGroup* isolate_group,
+                                         LoadedModule* loaded_module) {
+  const intptr_t private_class_count =
+      loaded_module->abi_runtime_ids.private_class_count;
+  if (private_class_count == 0) return;
+
+  const intptr_t last_class_id =
+      loaded_module->base_class_id + private_class_count - 1;
+  isolate_group->class_table()->AllocateIndex(last_class_id);
+  loaded_module->class_count = private_class_count;
+}
+
 // DeserializationRoots for kFullAOTModule snapshots.
 // Reads into a module-specific ObjectStore and extends the IsolateGroup's
 // dispatch table to cover module class CIDs.
@@ -10452,6 +10464,7 @@ ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
   loaded_module->class_count = 0;
   InitializeModuleLinkTables(loaded_module);
   *out_module_id = isolate_group()->AddLoadedModule(loaded_module);
+  ReserveModuleClassTableSlots(isolate_group(), loaded_module);
 
   ModuleDeserializationRoots roots(module_object_store, loaded_module);
   deserializer.Deserialize(&roots);

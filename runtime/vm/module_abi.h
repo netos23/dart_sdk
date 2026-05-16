@@ -67,9 +67,26 @@ struct ModuleAbiHeader {
   }
 };
 
+// Optional fixed-size payload immediately following ModuleAbiHeader. These
+// counts let the loader reserve isolate-group runtime id ranges before the
+// module object graph is deserialized.
+//
+// Payload layout:
+//   0..3   module-private non-top-level class count
+//   4..7   module-private selector count
+//   8..11  serialized module dispatch table entry count
+//   12..15 reserved
+struct ModuleAbiRuntimeIds {
+  uint32_t private_class_count = 0;
+  uint32_t private_selector_count = 0;
+  uint32_t dispatch_table_entry_count = 0;
+  uint32_t reserved = 0;
+};
+
 class ModuleAbi {
  public:
   static constexpr intptr_t kHeaderSize = 48;
+  static constexpr intptr_t kRuntimeIdsSize = 16;
   static constexpr uint16_t kCurrentFormatVersion = 2;
 
   enum HeaderFlag : uint16_t {
@@ -111,9 +128,15 @@ class ModuleAbi {
   //   42..43 target OS
   //   44..47 reserved
   static const char* ReadHeader(const uint8_t* data, ModuleAbiHeader* out);
+  static const char* ReadRuntimeIds(const uint8_t* data,
+                                    const ModuleAbiHeader& header,
+                                    ModuleAbiRuntimeIds* out);
   static void WriteHeader(uint8_t* data,
                           uint64_t manifest_hash,
                           uint32_t payload_size = 0);
+  static void WriteHeaderAndRuntimeIds(uint8_t* data,
+                                       uint64_t manifest_hash,
+                                       const ModuleAbiRuntimeIds& runtime_ids);
   static const char* ValidateCompatibility(const ModuleAbiHeader& header,
                                            uint64_t host_manifest_hash,
                                            IsolateGroup* isolate_group);

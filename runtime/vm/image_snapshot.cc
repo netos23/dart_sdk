@@ -1295,9 +1295,13 @@ void AssemblyImageWriter::Finalize() {
 #endif
 }
 
-void AssemblyImageWriter::WriteModuleAbiData(uint64_t manifest_hash) {
-  alignas(compiler::target::kWordSize) uint8_t bytes[ModuleAbi::kHeaderSize];
-  ModuleAbi::WriteHeader(bytes, manifest_hash);
+void AssemblyImageWriter::WriteModuleAbiData(
+    uint64_t manifest_hash,
+    const ModuleAbiRuntimeIds& runtime_ids) {
+  static constexpr intptr_t kAbiDataSize =
+      ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsSize;
+  alignas(compiler::target::kWordSize) uint8_t bytes[kAbiDataSize];
+  ModuleAbi::WriteHeaderAndRuntimeIds(bytes, manifest_hash, runtime_ids);
 
 #if defined(DART_TARGET_OS_LINUX) || defined(DART_TARGET_OS_ANDROID) ||        \
     defined(DART_TARGET_OS_FUCHSIA) || defined(DART_TARGET_OS_WINDOWS)
@@ -1310,11 +1314,11 @@ void AssemblyImageWriter::WriteModuleAbiData(uint64_t manifest_hash) {
   assembly_stream_->Printf(".globl %s\n", kModuleAbiDataAsmSymbol);
   Align(compiler::target::kWordSize, 0, 0);
   assembly_stream_->Printf("%s:\n", kModuleAbiDataAsmSymbol);
-  WriteBytes(bytes, ModuleAbi::kHeaderSize);
+  WriteBytes(bytes, kAbiDataSize);
 #if defined(DART_TARGET_OS_LINUX) || defined(DART_TARGET_OS_ANDROID) ||        \
     defined(DART_TARGET_OS_FUCHSIA)
   assembly_stream_->Printf(".size %s, %zu\n", kModuleAbiDataAsmSymbol,
-                           ModuleAbi::kHeaderSize);
+                           static_cast<size_t>(kAbiDataSize));
   assembly_stream_->Printf(".type %s, %%object\n", kModuleAbiDataAsmSymbol);
 #elif defined(DART_TARGET_OS_MACOS) || defined(DART_TARGET_OS_MACOS_IOS) ||    \
     defined(DART_TARGET_OS_WINDOWS)
@@ -1933,18 +1937,22 @@ void BlobImageWriter::Finalize() {
 }
 
 #if defined(DART_PRECOMPILER)
-void BlobImageWriter::WriteModuleAbiData(uint64_t manifest_hash) {
-  uint8_t* bytes = zone_->Alloc<uint8_t>(ModuleAbi::kHeaderSize);
-  ModuleAbi::WriteHeader(bytes, manifest_hash);
+void BlobImageWriter::WriteModuleAbiData(
+    uint64_t manifest_hash,
+    const ModuleAbiRuntimeIds& runtime_ids) {
+  static constexpr intptr_t kAbiDataSize =
+      ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsSize;
+  uint8_t* bytes = zone_->Alloc<uint8_t>(kAbiDataSize);
+  ModuleAbi::WriteHeaderAndRuntimeIds(bytes, manifest_hash, runtime_ids);
   const intptr_t label = next_label_++;
   if (so_ != nullptr) {
-    so_->AddROData(kModuleAbiDataAsmSymbol, label, bytes,
-                   ModuleAbi::kHeaderSize, /*relocations=*/nullptr,
+    so_->AddROData(kModuleAbiDataAsmSymbol, label, bytes, kAbiDataSize,
+                   /*relocations=*/nullptr,
                    /*symbols=*/nullptr);
   }
   if (debug_so_ != nullptr) {
-    debug_so_->AddROData(kModuleAbiDataAsmSymbol, label, bytes,
-                         ModuleAbi::kHeaderSize, /*relocations=*/nullptr,
+    debug_so_->AddROData(kModuleAbiDataAsmSymbol, label, bytes, kAbiDataSize,
+                         /*relocations=*/nullptr,
                          /*symbols=*/nullptr);
   }
 }
