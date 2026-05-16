@@ -472,6 +472,8 @@ class ImageWriter : public ValueObject {
       static_cast<int>(ProgramSection::BuildId) + 1;
 
 #if defined(DART_PRECOMPILER)
+  virtual void WriteModuleAbiData(uint64_t manifest_hash) = 0;
+
   // Returns a predetermined label for the given section in the VM isolate
   // (if vm is true) or application isolate (otherwise) section. Some sections
   // are shared by both.
@@ -815,6 +817,7 @@ class AssemblyImageWriter : public ImageWriter {
                       bool strip = false,
                       SharedObjectWriter* debug_so = nullptr);
   virtual void Finalize();
+  virtual void WriteModuleAbiData(uint64_t manifest_hash);
 
  private:
   virtual void WriteBss(bool vm);
@@ -884,6 +887,9 @@ class BlobImageWriter : public ImageWriter {
 #endif
 
   virtual void Finalize();
+#if defined(DART_PRECOMPILER)
+  virtual void WriteModuleAbiData(uint64_t manifest_hash);
+#endif
 
  private:
   virtual void WriteBss(bool vm);

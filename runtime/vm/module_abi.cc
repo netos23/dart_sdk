@@ -28,6 +28,23 @@ uint64_t ReadUint64LE(const uint8_t* data) {
   return value;
 }
 
+void WriteUint16LE(uint8_t* data, uint16_t value) {
+  data[0] = static_cast<uint8_t>(value);
+  data[1] = static_cast<uint8_t>(value >> 8);
+}
+
+void WriteUint32LE(uint8_t* data, uint32_t value) {
+  for (intptr_t i = 0; i < 4; i++) {
+    data[i] = static_cast<uint8_t>(value >> (8 * i));
+  }
+}
+
+void WriteUint64LE(uint8_t* data, uint64_t value) {
+  for (intptr_t i = 0; i < 8; i++) {
+    data[i] = static_cast<uint8_t>(value >> (8 * i));
+  }
+}
+
 bool HasModuleAbiMagic(const uint8_t* data) {
   return data[0] == 'D' && data[1] == 'M' && data[2] == 'A' && data[3] == 'B';
 }
@@ -64,6 +81,22 @@ const char* ModuleAbi::ReadHeader(const uint8_t* data, ModuleAbiHeader* out) {
 
   *out = header;
   return nullptr;
+}
+
+void ModuleAbi::WriteHeader(uint8_t* data,
+                            uint64_t manifest_hash,
+                            uint16_t flags,
+                            uint32_t payload_size) {
+  ASSERT(data != nullptr);
+  data[0] = 'D';
+  data[1] = 'M';
+  data[2] = 'A';
+  data[3] = 'B';
+  WriteUint16LE(data + 4, kCurrentFormatVersion);
+  WriteUint16LE(data + 6, flags);
+  WriteUint32LE(data + 8, kHeaderSize);
+  WriteUint32LE(data + 12, payload_size);
+  WriteUint64LE(data + 16, manifest_hash);
 }
 
 }  // namespace dart

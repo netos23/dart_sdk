@@ -487,6 +487,9 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   uint64_t module_abi_manifest_hash() const {
     return module_abi_manifest_hash_;
   }
+  void set_module_abi_manifest_hash(uint64_t manifest_hash) {
+    module_abi_manifest_hash_ = manifest_hash;
+  }
   void SetModuleAbiManifest(const Array& manifest, uint64_t manifest_hash);
 
   ClassTableAllocator* class_table_allocator() {

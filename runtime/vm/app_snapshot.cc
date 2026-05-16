@@ -7236,6 +7236,9 @@ class ProgramSerializationRoots : public SerializationRoots {
 
     // The dispatch table is serialized only for precompiled snapshots.
     s->WriteDispatchTable(dispatch_table_entries_);
+
+    s->WriteUnsigned64(
+        s->thread()->isolate_group()->module_abi_manifest_hash());
   }
 
   virtual const CompressedStackMaps& canonicalized_stack_map_entries() const {
@@ -7301,6 +7304,10 @@ class ProgramDeserializationRoots : public DeserializationRoots {
 
     // Deserialize dispatch table (when applicable)
     d->ReadDispatchTable();
+
+    const uint64_t module_abi_manifest_hash = d->ReadUnsigned64();
+    d->thread()->isolate_group()->set_module_abi_manifest_hash(
+        module_abi_manifest_hash);
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
@@ -7381,6 +7388,10 @@ class ModuleDeserializationRoots : public DeserializationRoots {
 
     // Read and install the module's dispatch table (extends host coverage).
     d->ReadModuleDispatchTable();
+
+    // Consumes the program-level ABI hash emitted by ProgramSerializationRoots.
+    // The loader-visible module ABI hash is carried by kDartModuleAbiData.
+    d->ReadUnsigned64();
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {

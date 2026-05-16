@@ -18,6 +18,7 @@
 #include "vm/heap/heap.h"
 #include "vm/instructions.h"
 #include "vm/json_writer.h"
+#include "vm/module_abi.h"
 #include "vm/object.h"
 #include "vm/object_store.h"
 #include "vm/program_visitor.h"
@@ -1294,6 +1295,35 @@ void AssemblyImageWriter::Finalize() {
 #endif
 }
 
+void AssemblyImageWriter::WriteModuleAbiData(uint64_t manifest_hash) {
+  alignas(compiler::target::kWordSize) uint8_t bytes[ModuleAbi::kHeaderSize];
+  ModuleAbi::WriteHeader(bytes, manifest_hash);
+
+#if defined(DART_TARGET_OS_LINUX) || defined(DART_TARGET_OS_ANDROID) ||        \
+    defined(DART_TARGET_OS_FUCHSIA) || defined(DART_TARGET_OS_WINDOWS)
+  assembly_stream_->WriteString(".section .rodata\n");
+#elif defined(DART_TARGET_OS_MACOS) || defined(DART_TARGET_OS_MACOS_IOS)
+  assembly_stream_->WriteString(".const\n");
+#else
+  UNIMPLEMENTED();
+#endif
+  assembly_stream_->Printf(".globl %s\n", kModuleAbiDataAsmSymbol);
+  Align(compiler::target::kWordSize, 0, 0);
+  assembly_stream_->Printf("%s:\n", kModuleAbiDataAsmSymbol);
+  WriteBytes(bytes, ModuleAbi::kHeaderSize);
+#if defined(DART_TARGET_OS_LINUX) || defined(DART_TARGET_OS_ANDROID) ||        \
+    defined(DART_TARGET_OS_FUCHSIA)
+  assembly_stream_->Printf(".size %s, %zu\n", kModuleAbiDataAsmSymbol,
+                           ModuleAbi::kHeaderSize);
+  assembly_stream_->Printf(".type %s, %%object\n", kModuleAbiDataAsmSymbol);
+#elif defined(DART_TARGET_OS_MACOS) || defined(DART_TARGET_OS_MACOS_IOS) ||    \
+    defined(DART_TARGET_OS_WINDOWS)
+  // MachO symbol tables and Windows assembly do not use .size/.type here.
+#else
+  UNIMPLEMENTED();
+#endif
+}
+
 void ImageWriter::SnapshotTextObjectNamer::AddNonUniqueNameFor(
     BaseTextBuffer* buffer,
     const Object& object) {
@@ -1901,6 +1931,24 @@ void BlobImageWriter::Finalize() {
   }
 #endif
 }
+
+#if defined(DART_PRECOMPILER)
+void BlobImageWriter::WriteModuleAbiData(uint64_t manifest_hash) {
+  uint8_t* bytes = zone_->Alloc<uint8_t>(ModuleAbi::kHeaderSize);
+  ModuleAbi::WriteHeader(bytes, manifest_hash);
+  const intptr_t label = next_label_++;
+  if (so_ != nullptr) {
+    so_->AddROData(kModuleAbiDataAsmSymbol, label, bytes,
+                   ModuleAbi::kHeaderSize, /*relocations=*/nullptr,
+                   /*symbols=*/nullptr);
+  }
+  if (debug_so_ != nullptr) {
+    debug_so_->AddROData(kModuleAbiDataAsmSymbol, label, bytes,
+                         ModuleAbi::kHeaderSize, /*relocations=*/nullptr,
+                         /*symbols=*/nullptr);
+  }
+}
+#endif  // defined(DART_PRECOMPILER)
 
 intptr_t BlobImageWriter::WriteBytes(const void* bytes, intptr_t size) {
   current_section_stream_->WriteBytes(bytes, size);

@@ -53,6 +53,10 @@ class ModuleAbi {
   //   12..15 payload size
   //   16..23 ABI manifest hash
   static const char* ReadHeader(const uint8_t* data, ModuleAbiHeader* out);
+  static void WriteHeader(uint8_t* data,
+                          uint64_t manifest_hash,
+                          uint16_t flags = 0,
+                          uint32_t payload_size = 0);
 
  private:
   DISALLOW_ALLOCATION();

@@ -89,6 +89,10 @@ DEFINE_FLAG(bool,
             "Enable deprecated dart:cli waitFor. "
             "This feature will be fully removed in Dart 3.4 release. "
             "See https://dartbug.com/52121.");
+DEFINE_FLAG(uint64_t,
+            module_abi_manifest_hash,
+            0,
+            "ABI manifest hash to embed in dart:module AOT snapshots.");
 
 #define CHECK_ERROR_HANDLE(error)                                              \
   {                                                                            \
@@ -6654,6 +6658,11 @@ static void CreateAppAOTSnapshot(
   NOT_IN_PRODUCT(TimelineBeginEndScope tbes2(T, Timeline::GetIsolateStream(),
                                              "WriteAppAOTSnapshot"));
 
+  if (FLAG_module_abi_manifest_hash != 0) {
+    T->isolate_group()->set_module_abi_manifest_hash(
+        FLAG_module_abi_manifest_hash);
+  }
+
   ZoneWriteStream vm_snapshot_data(T->zone(), FullSnapshotWriter::kInitialSize);
   ZoneWriteStream vm_snapshot_instructions(T->zone(), kInitialSize);
   ZoneWriteStream isolate_snapshot_data(T->zone(),
@@ -6702,6 +6711,13 @@ static void CreateAppAOTSnapshot(
       writer.WriteFullSnapshot(units);
     } else {
       writer.WriteUnitSnapshot(units, unit, program_hash);
+    }
+    if (snapshot_kind == Snapshot::kFullAOTModule) {
+      const uint64_t manifest_hash =
+          FLAG_module_abi_manifest_hash != 0
+              ? FLAG_module_abi_manifest_hash
+              : T->isolate_group()->module_abi_manifest_hash();
+      image_writer->WriteModuleAbiData(manifest_hash);
     }
     image_writer->Finalize();
   };
@@ -6942,14 +6958,14 @@ Dart_CreateAppAOTSnapshotAsBinary(Dart_AotBinaryFormat format,
 #endif
 }
 
-DART_EXPORT Dart_Handle Dart_CreateModuleAOTSnapshotAsBinary(
-    Dart_AotBinaryFormat format,
-    Dart_StreamingWriteCallback callback,
-    void* callback_data,
-    bool strip,
-    void* debug_callback_data,
-    const char* identifier,
-    const char* path) {
+DART_EXPORT Dart_Handle
+Dart_CreateModuleAOTSnapshotAsBinary(Dart_AotBinaryFormat format,
+                                     Dart_StreamingWriteCallback callback,
+                                     void* callback_data,
+                                     bool strip,
+                                     void* debug_callback_data,
+                                     const char* identifier,
+                                     const char* path) {
 #if defined(TARGET_ARCH_IA32)
   return Api::NewError("AOT compilation is not supported on IA32.");
 #elif !defined(DART_PRECOMPILER)
