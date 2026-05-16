@@ -173,7 +173,8 @@ class FullSnapshotReader {
   ApiErrorPtr ReadProgramSnapshot();
   ApiErrorPtr ReadUnitSnapshot(const LoadingUnit& unit);
   // Deserializes a kFullAOTModule snapshot into |loaded_module|.
-  // Registers the module in the IsolateGroup (under program_lock() write).
+  // Reserves the module id and registers the module in the IsolateGroup under
+  // program_lock() write before GC-capable post-load work.
   // Returns the 0-based module index via |out_module_id|.
   ApiErrorPtr ReadModuleSnapshot(LoadedModule* loaded_module,
                                  intptr_t* out_module_id);

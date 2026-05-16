@@ -211,7 +211,8 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
     ThrowModuleSnapshotError(abi_error);
   }
 
-  // Ownership of |loaded| transfers to IsolateGroup inside ReadModuleSnapshot.
+  // Ownership of |loaded| transfers to IsolateGroup inside ReadModuleSnapshot
+  // when the loader reserves the module id.
   LoadedModule* loaded = new LoadedModule();
   loaded->dl_handle = dl_handle;
   loaded->isolate_data = isolate_snapshot_data;

@@ -7410,6 +7410,15 @@ static ArrayPtr BuildModuleExportTable(Zone* zone,
   return Array::MakeFixedLength(exports, /*unique=*/true);
 }
 
+static void InitializeModuleLinkTables(LoadedModule* loaded_module) {
+  ArrayPtr empty = Object::empty_array().ptr();
+  loaded_module->abi_imports = empty;
+  loaded_module->exports = empty;
+  loaded_module->export_link_slots = empty;
+  loaded_module->selector_bindings = empty;
+  loaded_module->class_id_bindings = empty;
+}
+
 // DeserializationRoots for kFullAOTModule snapshots.
 // Reads into a module-specific ObjectStore and extends the IsolateGroup's
 // dispatch table to cover module class CIDs.
@@ -10438,18 +10447,20 @@ ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
   deserializer.set_cid_offset(cids_before - kNumPredefinedCids);
 
   auto* module_object_store = new ObjectStore();
+  loaded_module->object_store = module_object_store;
+  loaded_module->base_class_id = cids_before;
+  loaded_module->class_count = 0;
+  InitializeModuleLinkTables(loaded_module);
+  *out_module_id = isolate_group()->AddLoadedModule(loaded_module);
+
   ModuleDeserializationRoots roots(module_object_store, loaded_module);
   deserializer.Deserialize(&roots);
 
-  loaded_module->object_store = module_object_store;
   // The module dispatch table was installed on the IsolateGroup by
   // ReadModuleDispatchTable; the old pointer is no longer valid.
   loaded_module->dispatch_table = nullptr;
-  loaded_module->base_class_id = cids_before;
   loaded_module->class_count =
       isolate_group()->class_table()->NumCids() - cids_before;
-
-  *out_module_id = isolate_group()->AddLoadedModule(loaded_module);
 
   return ApiError::null();
 }

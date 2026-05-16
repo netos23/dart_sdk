@@ -326,6 +326,9 @@ inline const char* RootSliceToCString(intptr_t slice) {
 // Runtime state for a dynamically loaded AOT module (dart:module).
 // Owned by IsolateGroup; protected by IsolateGroup::program_lock().
 struct LoadedModule {
+  // Index in IsolateGroup::loaded_modules_. Set when the load reserves the
+  // module id under program_lock().
+  intptr_t id = -1;
   void* dl_handle = nullptr;
   const uint8_t* isolate_data = nullptr;
   const uint8_t* isolate_instructions = nullptr;
@@ -478,7 +481,7 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   }
 
   // Module management (dart:module). Callers must hold program_lock().
-  // Transfers ownership of |module|. Returns 0-based index.
+  // Transfers ownership of |module| and reserves its 0-based module id.
   intptr_t AddLoadedModule(LoadedModule* module);
   // Returns nullptr if |index| is out of range.
   LoadedModule* GetLoadedModule(intptr_t index) const;

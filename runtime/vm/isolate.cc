@@ -499,8 +499,11 @@ void LoadedModule::VisitObjectPointers(ObjectPointerVisitor* visitor) {
 
 intptr_t IsolateGroup::AddLoadedModule(LoadedModule* module) {
   // Caller must hold program_lock() write.
+  ASSERT(module != nullptr);
+  ASSERT(module->id == -1);
+  module->id = loaded_modules_.length();
   loaded_modules_.Add(module);
-  return loaded_modules_.length() - 1;
+  return module->id;
 }
 
 LoadedModule* IsolateGroup::GetLoadedModule(intptr_t index) const {
