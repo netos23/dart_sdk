@@ -43,6 +43,10 @@ DEFINE_NATIVE_ENTRY(Module_getValue, 0, 2) {
   ThrowModuleUnsupported();
 }
 
+DEFINE_NATIVE_ENTRY(Module_lookupFunction, 0, 2) {
+  ThrowModuleUnsupported();
+}
+
 DEFINE_NATIVE_ENTRY(Module_invokeMethod, 0, 5) {
   ThrowModuleUnsupported();
 }
@@ -181,6 +185,16 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
 
     const uint64_t host_abi_hash =
         thread->isolate_group()->module_abi_manifest_hash();
+    if (module_abi_header.manifest_hash != 0 && host_abi_hash == 0) {
+      Utils::UnloadDynamicLibrary(dl_handle);
+      ThrowModuleSnapshotError(
+          "module requires an ABI manifest hash but host has none");
+    }
+    if (host_abi_hash != 0 && module_abi_header.manifest_hash == 0) {
+      Utils::UnloadDynamicLibrary(dl_handle);
+      ThrowModuleSnapshotError(
+          "host requires an ABI manifest hash but module has none");
+    }
     if (host_abi_hash != 0 &&
         module_abi_header.manifest_hash != host_abi_hash) {
       Utils::UnloadDynamicLibrary(dl_handle);
@@ -349,6 +363,23 @@ static FunctionPtr LookupModuleStaticFunction(Zone* zone,
   if (toplevel_class.IsNull()) return Function::null();
   function = toplevel_class.LookupStaticFunctionAllowPrivate(name);
   return function.ptr();
+}
+
+static FunctionPtr LookupModuleTopLevelFunction(LoadedModule* module,
+                                                Zone* zone,
+                                                const String& name) {
+  const GrowableObjectArray& libs =
+      GrowableObjectArray::Handle(zone, module->object_store->libraries());
+  if (libs.IsNull()) return Function::null();
+
+  Library& lib = Library::Handle(zone);
+  Function& function = Function::Handle(zone);
+  for (intptr_t i = 0; i < libs.Length(); i++) {
+    lib ^= libs.At(i);
+    function = LookupModuleStaticFunction(zone, lib, name);
+    if (!function.IsNull()) return function.ptr();
+  }
+  return Function::null();
 }
 
 static ClassPtr LookupModuleClass(LoadedModule* module,
@@ -537,6 +568,57 @@ DEFINE_NATIVE_ENTRY(Module_getValue, 0, 2) {
     }
   }
   ThrowSymbolNotFound("value", value_name.ToCString());
+}
+
+// ---------------------------------------------------------------------------
+// Module_lookupFunction – look up a top-level function and return its closure.
+// Native args: receiver(0), exportName(1)
+// ---------------------------------------------------------------------------
+DEFINE_NATIVE_ENTRY(Module_lookupFunction, 0, 2) {
+  if (!FLAG_precompiled_mode) ThrowModuleAotOnly();
+  GET_NON_NULL_NATIVE_ARGUMENT(Instance, module_obj, arguments->NativeArgAt(0));
+  GET_NON_NULL_NATIVE_ARGUMENT(String, export_name, arguments->NativeArgAt(1));
+
+  LoadedModule* m = GetLoadedModuleFromObject(thread, zone, module_obj);
+  Function& function = Function::Handle(
+      zone, LookupModuleTopLevelFunction(m, zone, export_name));
+  if (function.IsNull()) {
+    ThrowSymbolNotFound("function", export_name.ToCString());
+  }
+  if (!function.is_static() ||
+      function.kind() != UntaggedFunction::kRegularFunction) {
+    const String& msg = String::Handle(
+        zone, String::NewFormatted("Module export '%s' is not a top-level "
+                                   "regular function",
+                                   export_name.ToCString()));
+    Exceptions::ThrowArgumentError(msg);
+    UNREACHABLE();
+  }
+
+  const Class& owner = Class::Handle(zone, function.Owner());
+  const Error& error = Error::Handle(zone, owner.EnsureIsFinalized(thread));
+  if (!error.IsNull()) {
+    Exceptions::PropagateError(error);
+    UNREACHABLE();
+  }
+
+  if (!function.SafeToClosurize()) {
+    const String& msg = String::Handle(
+        zone, String::NewFormatted("Module function '%s' was not retained for "
+                                   "tear-off lookup. Annotate it with "
+                                   "@pragma('vm:entry-point') or "
+                                   "@pragma('vm:entry-point', 'get').",
+                                   export_name.ToCString()));
+    Exceptions::ThrowArgumentError(msg);
+    UNREACHABLE();
+  }
+
+  const Function& closure_function =
+      Function::Handle(zone, function.ImplicitClosureFunction());
+  if (closure_function.IsNull()) {
+    ThrowSymbolNotFound("function closure", export_name.ToCString());
+  }
+  return closure_function.ImplicitStaticClosure();
 }
 
 // ---------------------------------------------------------------------------

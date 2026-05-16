@@ -3,18 +3,18 @@ library dart.module;
 import 'dart:io';
 import 'dart:typed_data';
 
-
 class ModuleSource {
   @pragma("vm:entry-point")
   final String path;
-  
+
   ModuleSource(this.path);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-          other is ModuleSource && runtimeType == other.runtimeType &&
-              path == other.path;
+      other is ModuleSource &&
+          runtimeType == other.runtimeType &&
+          path == other.path;
 
   @override
   int get hashCode => path.hashCode;
@@ -23,7 +23,6 @@ class ModuleSource {
   String toString() {
     return 'ModuleSource{path: $path}';
   }
-  
 }
 
 class Module {
@@ -32,20 +31,25 @@ class Module {
   /// Get top level value
   external T getValue<T>(String valueName);
 
+  /// Look up an exported top-level function and return it as a callable value.
+  external T lookupFunction<T>(String exportName);
+
   /// Invoke top level method
-  external T invokeMethod<T>(String name, {
+  external T invokeMethod<T>(
+    String name, {
     List<Object?> positionalArgs = const [],
     List<Object?> optionalArgs = const [],
     Map<String, Object?> namedArgs = const {},
   });
 
   /// Invoke static method
-  external T invokeStaticMethod<T>(String className,
-      String name, {
-        List<Object?> positionalArgs = const [],
-        List<Object?> optionalArgs = const [],
-        Map<String, Object?> namedArgs = const {},
-      });
+  external T invokeStaticMethod<T>(
+    String className,
+    String name, {
+    List<Object?> positionalArgs = const [],
+    List<Object?> optionalArgs = const [],
+    Map<String, Object?> namedArgs = const {},
+  });
 
   /// Invoke constructor
   external T invokeConstructor<T>({

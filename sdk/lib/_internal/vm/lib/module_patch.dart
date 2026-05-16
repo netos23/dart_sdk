@@ -9,7 +9,7 @@ import "dart:_internal" show patch;
 class Module {
   @pragma("vm:entry-point")
   int _nativeId = 0;
-  
+
   @patch
   @pragma("vm:external-name", "Module_load")
   external factory Module.load(ModuleSource source);
@@ -17,6 +17,14 @@ class Module {
   @patch
   @pragma("vm:external-name", "Module_getValue")
   external T getValue<T>(String valueName);
+
+  @patch
+  T lookupFunction<T>(String exportName) {
+    return _lookupFunction(exportName) as T;
+  }
+
+  @pragma("vm:external-name", "Module_lookupFunction")
+  external Object? _lookupFunction(String exportName);
 
   // Internal native: args = positional values, argNames = sorted named arg
   // names (parallel with argValues). See Module_invokeMethod in module.cc.
@@ -36,11 +44,12 @@ class Module {
     Map<String, Object?> namedArgs = const {},
   }) {
     return _invokeMethod(
-      name,
-      [...positionalArgs, ...optionalArgs],
-      namedArgs.keys.toList(),
-      namedArgs.values.toList(),
-    ) as T;
+          name,
+          [...positionalArgs, ...optionalArgs],
+          namedArgs.keys.toList(),
+          namedArgs.values.toList(),
+        )
+        as T;
   }
 
   @pragma("vm:external-name", "Module_invokeStaticMethod")
@@ -61,12 +70,13 @@ class Module {
     Map<String, Object?> namedArgs = const {},
   }) {
     return _invokeStaticMethod(
-      className,
-      name,
-      [...positionalArgs, ...optionalArgs],
-      namedArgs.keys.toList(),
-      namedArgs.values.toList(),
-    ) as T;
+          className,
+          name,
+          [...positionalArgs, ...optionalArgs],
+          namedArgs.keys.toList(),
+          namedArgs.values.toList(),
+        )
+        as T;
   }
 
   @pragma("vm:external-name", "Module_invokeConstructor")
@@ -87,11 +97,12 @@ class Module {
     Map<String, Object?> namedArgs = const {},
   }) {
     return _invokeConstructor(
-      className,
-      constructorName,
-      [...positionalArgs, ...optionalArgs],
-      namedArgs.keys.toList(),
-      namedArgs.values.toList(),
-    ) as T;
+          className,
+          constructorName,
+          [...positionalArgs, ...optionalArgs],
+          namedArgs.keys.toList(),
+          namedArgs.values.toList(),
+        )
+        as T;
   }
 }

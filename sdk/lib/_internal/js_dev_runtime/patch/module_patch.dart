@@ -5,7 +5,9 @@
 import "dart:_internal" show patch;
 
 Never _unimplemented(String member) {
-  throw UnimplementedError("dart:module is not implemented on dartdevc: $member");
+  throw UnimplementedError(
+    "dart:module is not implemented on dartdevc: $member",
+  );
 }
 
 @patch
@@ -15,6 +17,10 @@ class Module {
 
   @patch
   T getValue<T>(String valueName) => _unimplemented("Module.getValue");
+
+  @patch
+  T lookupFunction<T>(String exportName) =>
+      _unimplemented("Module.lookupFunction");
 
   @patch
   T invokeMethod<T>(
@@ -42,4 +48,3 @@ class Module {
     Map<String, Object?> namedArgs = const {},
   }) => _unimplemented("Module.invokeConstructor");
 }
-

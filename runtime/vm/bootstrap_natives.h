@@ -153,6 +153,7 @@ namespace dart {
   V(Module_invokeMethod, 5)                                                    \
   V(Module_invokeStaticMethod, 6)                                              \
   V(Module_load, 2)                                                            \
+  V(Module_lookupFunction, 2)                                                  \
   V(MicrotaskMirrorQueue_onScheduleAsyncCallback, 0)                           \
   V(MicrotaskMirrorQueue_onSchedulePriorityAsyncCallback, 0)                   \
   V(MicrotaskMirrorQueue_onAsyncCallbackComplete, 2)                           \

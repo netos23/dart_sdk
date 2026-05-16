@@ -21,9 +21,9 @@ UNIT_TEST_CASE(ModuleAbiReadHeader) {
   ModuleAbiHeader header;
   EXPECT_NULLPTR(ModuleAbi::ReadHeader(data, &header));
   EXPECT_EQ(ModuleAbi::kCurrentFormatVersion, header.format_version);
-  EXPECT_EQ(2, header.flags);
-  EXPECT_EQ(ModuleAbi::kHeaderSize, header.header_size);
-  EXPECT_EQ(3, header.payload_size);
+  EXPECT_EQ(static_cast<uint16_t>(2), header.flags);
+  EXPECT_EQ(static_cast<uint32_t>(ModuleAbi::kHeaderSize), header.header_size);
+  EXPECT_EQ(static_cast<uint32_t>(3), header.payload_size);
   EXPECT_EQ(kTestManifestHash, header.manifest_hash);
   EXPECT_EQ(ModuleAbi::kHeaderSize + 3, header.TotalSize());
 }

@@ -17,6 +17,10 @@ class Module {
   T getValue<T>(String valueName) => _unimplemented("Module.getValue");
 
   @patch
+  T lookupFunction<T>(String exportName) =>
+      _unimplemented("Module.lookupFunction");
+
+  @patch
   T invokeMethod<T>(
     String name, {
     List<Object?> positionalArgs = const [],
@@ -42,4 +46,3 @@ class Module {
     Map<String, Object?> namedArgs = const {},
   }) => _unimplemented("Module.invokeConstructor");
 }
-
