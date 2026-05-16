@@ -4,6 +4,12 @@
 
 #include "vm/module_abi.h"
 
+#include <cstdlib>
+#include <cstring>
+
+#include "vm/dart.h"
+#include "vm/version.h"
+
 namespace dart {
 namespace {
 
@@ -49,6 +55,104 @@ bool HasModuleAbiMagic(const uint8_t* data) {
   return data[0] == 'D' && data[1] == 'M' && data[2] == 'A' && data[3] == 'B';
 }
 
+uint64_t HashCString(const char* value) {
+  ASSERT(value != nullptr);
+  static constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+  static constexpr uint64_t kFnvPrime = 1099511628211ULL;
+  uint64_t hash = kFnvOffsetBasis;
+  for (const char* cursor = value; *cursor != '\0'; cursor++) {
+    hash ^= static_cast<uint8_t>(*cursor);
+    hash *= kFnvPrime;
+  }
+  return hash;
+}
+
+uint64_t CurrentSdkHash() {
+  const char* sdk_hash = Version::SdkHash();
+  return HashCString(sdk_hash == nullptr ? "" : sdk_hash);
+}
+
+uint64_t CurrentCompilerFlagsHash(IsolateGroup* isolate_group) {
+  char* features =
+      Dart::FeaturesString(isolate_group, /*is_vm_isolate=*/false,
+                           Snapshot::kFullAOTModule);
+  ASSERT(features != nullptr);
+  const uint64_t hash = HashCString(features);
+  free(features);
+  return hash;
+}
+
+uint16_t CurrentTargetArch() {
+#if defined(TARGET_ARCH_IA32)
+  return ModuleAbi::kTargetArchIA32;
+#elif defined(TARGET_ARCH_X64)
+  return ModuleAbi::kTargetArchX64;
+#elif defined(TARGET_ARCH_ARM)
+  return ModuleAbi::kTargetArchARM;
+#elif defined(TARGET_ARCH_ARM64)
+  return ModuleAbi::kTargetArchARM64;
+#elif defined(TARGET_ARCH_RISCV32)
+  return ModuleAbi::kTargetArchRISCV32;
+#elif defined(TARGET_ARCH_RISCV64)
+  return ModuleAbi::kTargetArchRISCV64;
+#else
+#error What architecture?
+#endif
+}
+
+uint16_t CurrentTargetOs() {
+#if defined(DART_TARGET_OS_ANDROID)
+  return ModuleAbi::kTargetOsAndroid;
+#elif defined(DART_TARGET_OS_FUCHSIA)
+  return ModuleAbi::kTargetOsFuchsia;
+#elif defined(DART_TARGET_OS_MACOS)
+#if defined(DART_TARGET_OS_MACOS_IOS)
+  return ModuleAbi::kTargetOsIOS;
+#else
+  return ModuleAbi::kTargetOsMacOS;
+#endif
+#elif defined(DART_TARGET_OS_LINUX)
+  return ModuleAbi::kTargetOsLinux;
+#elif defined(DART_TARGET_OS_WINDOWS)
+  return ModuleAbi::kTargetOsWindows;
+#else
+#error What operating system?
+#endif
+}
+
+uint16_t CurrentFlags() {
+  uint16_t flags = ModuleAbi::kSoundNullSafety;
+#if defined(DART_COMPRESSED_POINTERS)
+  flags |= ModuleAbi::kCompressedPointers;
+#endif
+#if defined(PRODUCT)
+  flags |= ModuleAbi::kProductMode;
+#endif
+  return flags;
+}
+
+bool FlagMatches(uint16_t left, uint16_t right, ModuleAbi::HeaderFlag flag) {
+  return ((left ^ right) & flag) == 0;
+}
+
+void WriteHeaderFields(uint8_t* data, const ModuleAbiHeader& header) {
+  ASSERT(data != nullptr);
+  data[0] = 'D';
+  data[1] = 'M';
+  data[2] = 'A';
+  data[3] = 'B';
+  WriteUint16LE(data + 4, header.format_version);
+  WriteUint16LE(data + 6, header.flags);
+  WriteUint32LE(data + 8, header.header_size);
+  WriteUint32LE(data + 12, header.payload_size);
+  WriteUint64LE(data + 16, header.manifest_hash);
+  WriteUint64LE(data + 24, header.sdk_hash);
+  WriteUint64LE(data + 32, header.compiler_flags_hash);
+  WriteUint16LE(data + 40, header.target_arch);
+  WriteUint16LE(data + 42, header.target_os);
+  WriteUint32LE(data + 44, header.reserved);
+}
+
 }  // namespace
 
 const char* ModuleAbi::ReadHeader(const uint8_t* data, ModuleAbiHeader* out) {
@@ -79,24 +183,73 @@ const char* ModuleAbi::ReadHeader(const uint8_t* data, ModuleAbiHeader* out) {
     return "module ABI payload is too large";
   }
 
+  header.sdk_hash = ReadUint64LE(data + 24);
+  header.compiler_flags_hash = ReadUint64LE(data + 32);
+  header.target_arch = ReadUint16LE(data + 40);
+  header.target_os = ReadUint16LE(data + 42);
+  header.reserved = ReadUint32LE(data + 44);
+
   *out = header;
   return nullptr;
 }
 
 void ModuleAbi::WriteHeader(uint8_t* data,
                             uint64_t manifest_hash,
-                            uint16_t flags,
                             uint32_t payload_size) {
-  ASSERT(data != nullptr);
-  data[0] = 'D';
-  data[1] = 'M';
-  data[2] = 'A';
-  data[3] = 'B';
-  WriteUint16LE(data + 4, kCurrentFormatVersion);
-  WriteUint16LE(data + 6, flags);
-  WriteUint32LE(data + 8, kHeaderSize);
-  WriteUint32LE(data + 12, payload_size);
-  WriteUint64LE(data + 16, manifest_hash);
+  ModuleAbiHeader header;
+  header.format_version = kCurrentFormatVersion;
+  header.flags = CurrentFlags();
+  header.header_size = kHeaderSize;
+  header.payload_size = payload_size;
+  header.manifest_hash = manifest_hash;
+  header.sdk_hash = CurrentSdkHash();
+  header.compiler_flags_hash =
+      CurrentCompilerFlagsHash(IsolateGroup::Current());
+  header.target_arch = CurrentTargetArch();
+  header.target_os = CurrentTargetOs();
+  header.reserved = 0;
+  WriteHeaderFields(data, header);
+}
+
+const char* ModuleAbi::ValidateCompatibility(const ModuleAbiHeader& header,
+                                             uint64_t host_manifest_hash,
+                                             IsolateGroup* isolate_group) {
+  if (header.sdk_hash != CurrentSdkHash()) {
+    return "module SDK hash does not match current SDK";
+  }
+  if (header.target_arch != CurrentTargetArch()) {
+    return "module target architecture does not match current VM";
+  }
+  if (header.target_os != CurrentTargetOs()) {
+    return "module target OS does not match current VM";
+  }
+
+  const uint16_t current_flags = CurrentFlags();
+  if (!FlagMatches(header.flags, current_flags, kCompressedPointers)) {
+    return "module compressed-pointers mode does not match current VM";
+  }
+  if (!FlagMatches(header.flags, current_flags, kProductMode)) {
+    return "module product mode does not match current VM";
+  }
+  if (!FlagMatches(header.flags, current_flags, kSoundNullSafety)) {
+    return "module null-safety mode does not match current VM";
+  }
+
+  if (header.compiler_flags_hash != CurrentCompilerFlagsHash(isolate_group)) {
+    return "module compiler flags do not match current VM";
+  }
+
+  if (header.manifest_hash != 0 && host_manifest_hash == 0) {
+    return "module requires an ABI manifest hash but host has none";
+  }
+  if (host_manifest_hash != 0 && header.manifest_hash == 0) {
+    return "host requires an ABI manifest hash but module has none";
+  }
+  if (host_manifest_hash != 0 && header.manifest_hash != host_manifest_hash) {
+    return "module ABI manifest hash does not match host";
+  }
+
+  return nullptr;
 }
 
 }  // namespace dart

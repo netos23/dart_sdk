@@ -6,6 +6,7 @@
 #include "../vm/object.h"
 #include "vm/bootstrap_natives.h"
 
+#include <cstdlib>
 #include <memory>
 #include "include/dart_api.h"
 #include "platform/lockers.h"
@@ -73,6 +74,12 @@ constexpr const char* kModuleNativeIdFieldName = "_nativeId";
                                 "Failed to load module snapshot: %s", error);
   Exceptions::ThrowUnsupportedError(msg);
   UNREACHABLE();
+}
+
+[[noreturn]] void ThrowModuleSnapshotMallocError(char* error) {
+  const char* copied = OS::SCreate(Thread::Current()->zone(), "%s", error);
+  free(error);
+  ThrowModuleSnapshotError(copied);
 }
 
 [[noreturn]] void ThrowModuleAotOnly() {
@@ -170,36 +177,38 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
     ThrowModuleSnapshotError(kind_str);
   }
 
+  SnapshotHeaderReader header_reader(snapshot);
+  intptr_t snapshot_payload_offset = 0;
+  char* snapshot_error = header_reader.VerifyVersionAndFeatures(
+      thread->isolate_group(), &snapshot_payload_offset);
+  if (snapshot_error != nullptr) {
+    Utils::UnloadDynamicLibrary(dl_handle);
+    ThrowModuleSnapshotMallocError(snapshot_error);
+  }
+
   const uint8_t* module_abi_data = reinterpret_cast<const uint8_t*>(
       Utils::ResolveSymbolInDynamicLibrary(dl_handle, kModuleAbiDataCSymbol));
   ModuleAbiHeader module_abi_header;
   intptr_t module_abi_data_size = 0;
-  if (module_abi_data != nullptr) {
-    const char* abi_error =
-        ModuleAbi::ReadHeader(module_abi_data, &module_abi_header);
-    if (abi_error != nullptr) {
-      Utils::UnloadDynamicLibrary(dl_handle);
-      ThrowModuleSnapshotError(abi_error);
-    }
-    module_abi_data_size = module_abi_header.TotalSize();
+  if (module_abi_data == nullptr) {
+    Utils::UnloadDynamicLibrary(dl_handle);
+    ThrowModuleSnapshotError("missing module ABI data symbol");
+  }
+  const char* abi_error =
+      ModuleAbi::ReadHeader(module_abi_data, &module_abi_header);
+  if (abi_error != nullptr) {
+    Utils::UnloadDynamicLibrary(dl_handle);
+    ThrowModuleSnapshotError(abi_error);
+  }
+  module_abi_data_size = module_abi_header.TotalSize();
 
-    const uint64_t host_abi_hash =
-        thread->isolate_group()->module_abi_manifest_hash();
-    if (module_abi_header.manifest_hash != 0 && host_abi_hash == 0) {
-      Utils::UnloadDynamicLibrary(dl_handle);
-      ThrowModuleSnapshotError(
-          "module requires an ABI manifest hash but host has none");
-    }
-    if (host_abi_hash != 0 && module_abi_header.manifest_hash == 0) {
-      Utils::UnloadDynamicLibrary(dl_handle);
-      ThrowModuleSnapshotError(
-          "host requires an ABI manifest hash but module has none");
-    }
-    if (host_abi_hash != 0 &&
-        module_abi_header.manifest_hash != host_abi_hash) {
-      Utils::UnloadDynamicLibrary(dl_handle);
-      ThrowModuleSnapshotError("module ABI manifest hash does not match host");
-    }
+  const uint64_t host_abi_hash =
+      thread->isolate_group()->module_abi_manifest_hash();
+  abi_error = ModuleAbi::ValidateCompatibility(module_abi_header, host_abi_hash,
+                                               thread->isolate_group());
+  if (abi_error != nullptr) {
+    Utils::UnloadDynamicLibrary(dl_handle);
+    ThrowModuleSnapshotError(abi_error);
   }
 
   // Ownership of |loaded| transfers to IsolateGroup inside ReadModuleSnapshot.
@@ -595,6 +604,22 @@ static ArrayPtr BuildArgArray(Zone* zone,
   return arr.ptr();
 }
 
+static ObjectPtr InvokeModuleFunction(Zone* zone,
+                                      const Function& function,
+                                      const Array& args,
+                                      const Array& names) {
+  const Array& desc = Array::Handle(
+      zone, ArgumentsDescriptor::NewBoxed(/*type_args_len=*/0, args.Length(),
+                                          names));
+  const Object& result =
+      Object::Handle(zone, DartEntry::InvokeFunction(function, args, desc));
+  if (result.IsError()) {
+    Exceptions::PropagateError(Error::Cast(result));
+    UNREACHABLE();
+  }
+  return result.ptr();
+}
+
 [[noreturn]] static void ThrowSymbolNotFound(const char* kind,
                                              const char* name) {
   const String& msg = String::Handle(
@@ -732,6 +757,16 @@ DEFINE_NATIVE_ENTRY(Module_invokeMethod, 0, 5) {
                                arguments->NativeArgAt(4));
 
   LoadedModule* m = GetLoadedModuleFromObject(thread, zone, module_obj);
+  const Array& args =
+      Array::Handle(zone, BuildArgArray(zone, pos_args, named_values));
+  const Array& names =
+      Array::Handle(zone, GrowableToArray(zone, arg_names_list));
+  const Function& export_function =
+      Function::Handle(zone, LookupModuleExportFunction(m, zone, func_name));
+  if (!export_function.IsNull()) {
+    return InvokeModuleFunction(zone, export_function, args, names);
+  }
+
   const GrowableObjectArray& libs =
       GrowableObjectArray::Handle(zone, m->object_store->libraries());
   if (!libs.IsNull()) {
@@ -744,21 +779,8 @@ DEFINE_NATIVE_ENTRY(Module_invokeMethod, 0, 5) {
           LookupModuleStaticField(zone, lib, func_name) == Field::null()) {
         continue;
       }
-      const Array& args =
-          Array::Handle(zone, BuildArgArray(zone, pos_args, named_values));
-      const Array& names =
-          Array::Handle(zone, GrowableToArray(zone, arg_names_list));
       if (!function.IsNull()) {
-        const Array& desc =
-            Array::Handle(zone, ArgumentsDescriptor::NewBoxed(
-                                    /*type_args_len=*/0, args.Length(), names));
-        const Object& result = Object::Handle(
-            zone, DartEntry::InvokeFunction(function, args, desc));
-        if (result.IsError()) {
-          Exceptions::PropagateError(Error::Cast(result));
-          UNREACHABLE();
-        }
-        return result.ptr();
+        return InvokeModuleFunction(zone, function, args, names);
       }
       const Object& result =
           Object::Handle(zone, lib.Invoke(func_name, args, names,
