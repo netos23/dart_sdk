@@ -28,6 +28,7 @@
 #include "vm/intrusive_dlist.h"
 #include "vm/megamorphic_cache_table.h"
 #include "vm/metrics.h"
+#include "vm/module_abi.h"
 #include "vm/os_thread.h"
 #include "vm/port.h"
 #include "vm/random.h"
@@ -272,6 +273,7 @@ enum RootSlice : intptr_t {
   kSharedInitialFieldTable,
   kSharedFieldTable,
   kLoadedModules,
+  kModuleAbiManifest,
   kBackgroundCompiler,
   kDebugger,
   kReloadContext,
@@ -302,6 +304,8 @@ inline const char* RootSliceToCString(intptr_t slice) {
       return "shared field table";
     case kLoadedModules:
       return "loaded modules";
+    case kModuleAbiManifest:
+      return "module ABI manifest";
     case kBackgroundCompiler:
       return "background compiler";
     case kDebugger:
@@ -325,6 +329,9 @@ struct LoadedModule {
   void* dl_handle = nullptr;
   const uint8_t* isolate_data = nullptr;
   const uint8_t* isolate_instructions = nullptr;
+  const uint8_t* abi_data = nullptr;
+  intptr_t abi_data_size = 0;
+  ModuleAbiHeader abi_header;
   // Module's own object store (libraries, classes, etc.). Owned.
   ObjectStore* object_store = nullptr;
   // Module static field initial values, indexed by Field::field_id().
@@ -341,9 +348,17 @@ struct LoadedModule {
   intptr_t base_class_id = 0;
   // Number of classes introduced by this module.
   intptr_t class_count = 0;
+  // ABI-aware link tables. These are intentionally VM arrays first so the
+  // snapshot format can stabilize before introducing bespoke C++ containers.
+  ArrayPtr abi_imports;
+  ArrayPtr exports;
+  ArrayPtr export_link_slots;
+  ArrayPtr selector_bindings;
+  ArrayPtr class_id_bindings;
 
-  LoadedModule() = default;
+  LoadedModule();
   ~LoadedModule();
+  bool has_abi() const { return abi_data != nullptr; }
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
   DISALLOW_COPY_AND_ASSIGN(LoadedModule);
 };
@@ -468,6 +483,11 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   // Returns nullptr if |index| is out of range.
   LoadedModule* GetLoadedModule(intptr_t index) const;
   intptr_t loaded_module_count() const;
+  ArrayPtr module_abi_manifest() const { return module_abi_manifest_; }
+  uint64_t module_abi_manifest_hash() const {
+    return module_abi_manifest_hash_;
+  }
+  void SetModuleAbiManifest(const Array& manifest, uint64_t manifest_hash);
 
   ClassTableAllocator* class_table_allocator() {
     return &class_table_allocator_;
@@ -1002,6 +1022,8 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   // Must not depend on ThreadState::Current()->zone() because IsolateGroup
   // is constructed before a mutator thread/zone is guaranteed to exist.
   MallocGrowableArray<LoadedModule*> loaded_modules_;
+  ArrayPtr module_abi_manifest_;
+  uint64_t module_abi_manifest_hash_ = 0;
   ArrayPtr saved_unlinked_calls_;
   std::shared_ptr<FieldTable> initial_field_table_;
   std::shared_ptr<FieldTable> sentinel_field_table_;

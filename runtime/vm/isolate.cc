@@ -334,6 +334,8 @@ IsolateGroup::IsolateGroup(std::shared_ptr<IsolateGroupSource> source,
       safepoint_handler_(new SafepointHandler(this)),
       store_buffer_(new StoreBuffer()),
       heap_(nullptr),
+      module_abi_manifest_(Array::null()),
+      module_abi_manifest_hash_(0),
       saved_unlinked_calls_(Array::null()),
       initial_field_table_(new FieldTable(/*isolate=*/nullptr)),
       sentinel_field_table_(new FieldTable(/*isolate=*/nullptr)),
@@ -447,6 +449,13 @@ IsolateGroup::~IsolateGroup() {
 #endif
 }
 
+LoadedModule::LoadedModule()
+    : abi_imports(Array::null()),
+      exports(Array::null()),
+      export_link_slots(Array::null()),
+      selector_bindings(Array::null()),
+      class_id_bindings(Array::null()) {}
+
 LoadedModule::~LoadedModule() {
   delete object_store;
   free(initial_field_values);
@@ -479,6 +488,13 @@ void LoadedModule::VisitObjectPointers(ObjectPointerVisitor* visitor) {
     visitor->VisitPointers(classes, classes + class_object_count - 1);
     visitor->clear_gc_root_type();
   }
+  visitor->set_gc_root_type("module ABI link tables");
+  visitor->VisitPointer(reinterpret_cast<ObjectPtr*>(&abi_imports));
+  visitor->VisitPointer(reinterpret_cast<ObjectPtr*>(&exports));
+  visitor->VisitPointer(reinterpret_cast<ObjectPtr*>(&export_link_slots));
+  visitor->VisitPointer(reinterpret_cast<ObjectPtr*>(&selector_bindings));
+  visitor->VisitPointer(reinterpret_cast<ObjectPtr*>(&class_id_bindings));
+  visitor->clear_gc_root_type();
 }
 
 intptr_t IsolateGroup::AddLoadedModule(LoadedModule* module) {
@@ -496,6 +512,12 @@ LoadedModule* IsolateGroup::GetLoadedModule(intptr_t index) const {
 intptr_t IsolateGroup::loaded_module_count() const {
   // Caller must hold at least program_lock() read.
   return loaded_modules_.length();
+}
+
+void IsolateGroup::SetModuleAbiManifest(const Array& manifest,
+                                        uint64_t manifest_hash) {
+  module_abi_manifest_ = manifest.ptr();
+  module_abi_manifest_hash_ = manifest_hash;
 }
 
 void IsolateGroup::RegisterIsolate(Isolate* isolate) {
@@ -3071,6 +3093,10 @@ void IsolateGroup::VisitSharedPointers(ObjectPointerVisitor* visitor,
       for (intptr_t i = 0; i < loaded_modules_.length(); i++) {
         loaded_modules_[i]->VisitObjectPointers(visitor);
       }
+      break;
+    case kModuleAbiManifest:
+      visitor->VisitPointer(
+          reinterpret_cast<ObjectPtr*>(&module_abi_manifest_));
       break;
     case kBackgroundCompiler:
       NOT_IN_PRECOMPILED(background_compiler()->VisitPointers(visitor));

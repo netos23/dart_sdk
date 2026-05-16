@@ -4035,6 +4035,7 @@ DART_EXPORT Dart_Handle Dart_LoadingUnitLibraryUris(intptr_t loading_unit_id);
 #define kIsolateSnapshotDataCSymbol "kDartIsolateSnapshotData"
 #define kIsolateSnapshotInstructionsCSymbol "kDartIsolateSnapshotInstructions"
 #define kIsolateSnapshotBssCSymbol "kDartIsolateSnapshotBss"
+#define kModuleAbiDataCSymbol "kDartModuleAbiData"
 #else
 #define kSnapshotBuildIdCSymbol "_kDartSnapshotBuildId"
 #define kVmSnapshotDataCSymbol "_kDartVmSnapshotData"
@@ -4043,6 +4044,7 @@ DART_EXPORT Dart_Handle Dart_LoadingUnitLibraryUris(intptr_t loading_unit_id);
 #define kIsolateSnapshotDataCSymbol "_kDartIsolateSnapshotData"
 #define kIsolateSnapshotInstructionsCSymbol "_kDartIsolateSnapshotInstructions"
 #define kIsolateSnapshotBssCSymbol "_kDartIsolateSnapshotBss"
+#define kModuleAbiDataCSymbol "_kDartModuleAbiData"
 #endif
 
 #define kSnapshotBuildIdAsmSymbol "_kDartSnapshotBuildId"
@@ -4053,6 +4055,7 @@ DART_EXPORT Dart_Handle Dart_LoadingUnitLibraryUris(intptr_t loading_unit_id);
 #define kIsolateSnapshotInstructionsAsmSymbol                                  \
   "_kDartIsolateSnapshotInstructions"
 #define kIsolateSnapshotBssAsmSymbol "_kDartIsolateSnapshotBss"
+#define kModuleAbiDataAsmSymbol "_kDartModuleAbiData"
 
 /**
  *  Creates a precompiled snapshot.

@@ -6,6 +6,7 @@
 #include "../vm/object.h"
 #include "vm/bootstrap_natives.h"
 
+#include <memory>
 #include "include/dart_api.h"
 #include "platform/lockers.h"
 #include "platform/utils.h"
@@ -15,13 +16,13 @@
 #include "vm/flags.h"
 #include "vm/growable_array.h"
 #include "vm/isolate.h"
+#include "vm/module_abi.h"
 #include "vm/native_entry.h"
 #include "vm/object.h"
 #include "vm/object_store.h"
 #include "vm/resolver.h"
 #include "vm/snapshot.h"
 #include "vm/symbols.h"
-#include <memory>
 
 namespace dart {
 // namespace
@@ -165,11 +166,36 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
     ThrowModuleSnapshotError(kind_str);
   }
 
+  const uint8_t* module_abi_data = reinterpret_cast<const uint8_t*>(
+      Utils::ResolveSymbolInDynamicLibrary(dl_handle, kModuleAbiDataCSymbol));
+  ModuleAbiHeader module_abi_header;
+  intptr_t module_abi_data_size = 0;
+  if (module_abi_data != nullptr) {
+    const char* abi_error =
+        ModuleAbi::ReadHeader(module_abi_data, &module_abi_header);
+    if (abi_error != nullptr) {
+      Utils::UnloadDynamicLibrary(dl_handle);
+      ThrowModuleSnapshotError(abi_error);
+    }
+    module_abi_data_size = module_abi_header.TotalSize();
+
+    const uint64_t host_abi_hash =
+        thread->isolate_group()->module_abi_manifest_hash();
+    if (host_abi_hash != 0 &&
+        module_abi_header.manifest_hash != host_abi_hash) {
+      Utils::UnloadDynamicLibrary(dl_handle);
+      ThrowModuleSnapshotError("module ABI manifest hash does not match host");
+    }
+  }
+
   // Ownership of |loaded| transfers to IsolateGroup inside ReadModuleSnapshot.
   LoadedModule* loaded = new LoadedModule();
   loaded->dl_handle = dl_handle;
   loaded->isolate_data = isolate_snapshot_data;
   loaded->isolate_instructions = isolate_snapshot_instructions;
+  loaded->abi_data = module_abi_data;
+  loaded->abi_data_size = module_abi_data_size;
+  loaded->abi_header = module_abi_header;
 
   intptr_t module_id = -1;
   {
@@ -329,13 +355,12 @@ static ClassPtr LookupModuleClass(LoadedModule* module,
                                   Zone* zone,
                                   const Library& lib,
                                   const String& name) {
-  std::unique_ptr<char> name_cstr {name.ToMallocCString()};
+  std::unique_ptr<char> name_cstr{name.ToMallocCString()};
   // Primary: scan the module's own class CID range directly. This is the most
   // reliable path in AOT mode because it does not depend on library dictionary
   // state or URL string comparisons — both of which can be unreliable for
   // module snapshots loaded at runtime.
   {
-
     ClassTable* class_table = Thread::Current()->isolate_group()->class_table();
     const intptr_t cid_start = module->base_class_id;
     const intptr_t cid_end = cid_start + module->class_count;
@@ -682,8 +707,6 @@ DEFINE_NATIVE_ENTRY(Module_invokeConstructor, 0, 6) {
       const Array& args = Array::Handle(zone, Array::New(n_total));
       const Array& names =
           Array::Handle(zone, GrowableToArray(zone, arg_names_list));
-
- 	    OS::Print("Constructor sig:  '%s' \n", String::Handle(zone, ctor.InternalSignature()).ToMallocCString());
 
       if (ctor.IsGenerativeConstructor()) {
         const Instance& new_obj = Instance::Handle(zone, Instance::New(klass));
