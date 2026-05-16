@@ -24,6 +24,7 @@
 #include "vm/heap/heap.h"
 #include "vm/image_snapshot.h"
 #include "vm/isolate.h"
+#include "vm/module_abi.h"
 #include "vm/native_entry.h"
 #include "vm/object.h"
 #include "vm/object_store.h"
@@ -7333,6 +7334,82 @@ class ProgramDeserializationRoots : public DeserializationRoots {
   ObjectStore* object_store_;
 };
 
+static ArrayPtr BuildModuleExportTable(Zone* zone,
+                                       ObjectStore* object_store) {
+  const GrowableObjectArray& libs =
+      GrowableObjectArray::Handle(zone, object_store->libraries());
+  if (libs.IsNull()) return Object::empty_array().ptr();
+
+  const GrowableObjectArray& exports =
+      GrowableObjectArray::Handle(zone, GrowableObjectArray::New(Heap::kOld));
+  Library& lib = Library::Handle(zone);
+  Class& toplevel_class = Class::Handle(zone);
+  Array& fields = Array::Handle(zone);
+  Array& functions = Array::Handle(zone);
+  Field& field = Field::Handle(zone);
+  Function& function = Function::Handle(zone);
+  String& name = String::Handle(zone);
+  const Smi& field_kind = Smi::Handle(
+      zone, Smi::New(static_cast<intptr_t>(ModuleExportKind::kField)));
+  const Smi& function_kind = Smi::Handle(
+      zone, Smi::New(static_cast<intptr_t>(ModuleExportKind::kFunction)));
+  const Smi& getter_kind = Smi::Handle(
+      zone, Smi::New(static_cast<intptr_t>(ModuleExportKind::kGetter)));
+
+  for (intptr_t i = 0; i < libs.Length(); i++) {
+    lib ^= libs.At(i);
+    toplevel_class = lib.toplevel_class();
+    if (toplevel_class.IsNull()) continue;
+
+    fields = toplevel_class.fields();
+    if (!fields.IsNull()) {
+      for (intptr_t j = 0; j < fields.Length(); j++) {
+        field ^= fields.At(j);
+        if (field.IsNull() || !field.is_static()) continue;
+
+        name = field.name();
+        exports.Add(field_kind, Heap::kOld);
+        exports.Add(name, Heap::kOld);
+        exports.Add(field, Heap::kOld);
+      }
+    }
+
+    functions = toplevel_class.current_functions();
+    if (functions.IsNull()) continue;
+
+    for (intptr_t j = 0; j < functions.Length(); j++) {
+      function ^= functions.At(j);
+      if (function.IsNull()) continue;
+      if (!function.is_static() ||
+          function.kind() != UntaggedFunction::kRegularFunction) {
+        continue;
+      }
+      name = function.name();
+      exports.Add(function_kind, Heap::kOld);
+      exports.Add(name, Heap::kOld);
+      exports.Add(function, Heap::kOld);
+    }
+
+    for (intptr_t j = 0; j < functions.Length(); j++) {
+      function ^= functions.At(j);
+      if (function.IsNull() || !function.is_static() ||
+          (function.kind() != UntaggedFunction::kGetterFunction &&
+           function.kind() != UntaggedFunction::kImplicitStaticGetter)) {
+        continue;
+      }
+      name = function.name();
+      if (!Field::IsGetterName(name)) continue;
+      name = Field::NameFromGetter(name);
+      exports.Add(getter_kind, Heap::kOld);
+      exports.Add(name, Heap::kOld);
+      exports.Add(function, Heap::kOld);
+    }
+  }
+
+  ASSERT(exports.Length() % ModuleExportTable::kEntryLength == 0);
+  return Array::MakeFixedLength(exports, /*unique=*/true);
+}
+
 // DeserializationRoots for kFullAOTModule snapshots.
 // Reads into a module-specific ObjectStore and extends the IsolateGroup's
 // dispatch table to cover module class CIDs.
@@ -7420,6 +7497,8 @@ class ModuleDeserializationRoots : public DeserializationRoots {
     // Refresh class sizes for any new module classes now in the shared table.
     d->isolate_group()->class_table()->CopySizesFromClassObjects();
     d->heap()->old_space()->EvaluateAfterLoading();
+
+    loaded_module_->exports = BuildModuleExportTable(d->zone(), object_store_);
   }
 
  private:

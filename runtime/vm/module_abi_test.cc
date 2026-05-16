@@ -62,4 +62,18 @@ UNIT_TEST_CASE(ModuleAbiRejectsSmallHeader) {
                ModuleAbi::ReadHeader(data, &header));
 }
 
+UNIT_TEST_CASE(ModuleExportTableLayout) {
+  EXPECT_EQ(static_cast<intptr_t>(0),
+            static_cast<intptr_t>(ModuleExportKind::kFunction));
+  EXPECT_EQ(static_cast<intptr_t>(1),
+            static_cast<intptr_t>(ModuleExportKind::kField));
+  EXPECT_EQ(static_cast<intptr_t>(2),
+            static_cast<intptr_t>(ModuleExportKind::kGetter));
+
+  EXPECT_EQ(static_cast<intptr_t>(0), ModuleExportTable::kKindIndex);
+  EXPECT_EQ(static_cast<intptr_t>(1), ModuleExportTable::kNameIndex);
+  EXPECT_EQ(static_cast<intptr_t>(2), ModuleExportTable::kTargetIndex);
+  EXPECT_EQ(static_cast<intptr_t>(3), ModuleExportTable::kEntryLength);
+}
+
 }  // namespace dart

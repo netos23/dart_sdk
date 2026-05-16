@@ -21,6 +21,26 @@ enum class ModuleAbiObjectKind : uint8_t {
   kTypeArguments = 6,
 };
 
+// Runtime export table tags used by LoadedModule::exports. The table is a flat
+// VM Array with ModuleExportTable::kEntryLength elements per entry.
+enum class ModuleExportKind : intptr_t {
+  kFunction = 0,
+  kField = 1,
+  kGetter = 2,
+};
+
+class ModuleExportTable {
+ public:
+  static constexpr intptr_t kKindIndex = 0;
+  static constexpr intptr_t kNameIndex = 1;
+  static constexpr intptr_t kTargetIndex = 2;
+  static constexpr intptr_t kEntryLength = 3;
+
+ private:
+  DISALLOW_ALLOCATION();
+  DISALLOW_IMPLICIT_CONSTRUCTORS(ModuleExportTable);
+};
+
 // Fixed-size prefix for the optional kDartModuleAbiData symbol.
 //
 // Multi-byte fields are little-endian. The payload format is intentionally not

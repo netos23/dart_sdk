@@ -365,15 +365,55 @@ static FunctionPtr LookupModuleStaticFunction(Zone* zone,
   return function.ptr();
 }
 
+static ObjectPtr LookupModuleExportTarget(LoadedModule* module,
+                                          Zone* zone,
+                                          const String& name,
+                                          ModuleExportKind kind) {
+  const Array& exports = Array::Handle(zone, module->exports);
+  if (exports.IsNull()) return Object::null();
+
+  String& export_name = String::Handle(zone);
+  Object& object = Object::Handle(zone);
+  for (intptr_t i = 0; i + ModuleExportTable::kTargetIndex < exports.Length();
+       i += ModuleExportTable::kEntryLength) {
+    object = exports.At(i + ModuleExportTable::kKindIndex);
+    if (!object.IsSmi() ||
+        Smi::Cast(object).Value() != static_cast<intptr_t>(kind)) {
+      continue;
+    }
+
+    object = exports.At(i + ModuleExportTable::kNameIndex);
+    if (!object.IsString()) continue;
+    export_name ^= object.ptr();
+    if (!String::EqualsIgnoringPrivateKey(export_name, name)) continue;
+
+    return exports.At(i + ModuleExportTable::kTargetIndex);
+  }
+  return Object::null();
+}
+
+static FunctionPtr LookupModuleExportFunction(LoadedModule* module,
+                                              Zone* zone,
+                                              const String& name) {
+  const Object& target = Object::Handle(
+      zone, LookupModuleExportTarget(module, zone, name,
+                                     ModuleExportKind::kFunction));
+  if (!target.IsFunction()) return Function::null();
+  return Function::Cast(target).ptr();
+}
+
 static FunctionPtr LookupModuleTopLevelFunction(LoadedModule* module,
                                                 Zone* zone,
                                                 const String& name) {
+  Function& function =
+      Function::Handle(zone, LookupModuleExportFunction(module, zone, name));
+  if (!function.IsNull()) return function.ptr();
+
   const GrowableObjectArray& libs =
       GrowableObjectArray::Handle(zone, module->object_store->libraries());
   if (libs.IsNull()) return Function::null();
 
   Library& lib = Library::Handle(zone);
-  Function& function = Function::Handle(zone);
   for (intptr_t i = 0; i < libs.Length(); i++) {
     lib ^= libs.At(i);
     function = LookupModuleStaticFunction(zone, lib, name);
@@ -475,6 +515,55 @@ static ClassPtr LookupModuleClass(LoadedModule* module,
   return Class::null();
 }
 
+static ObjectPtr ReadModuleExportedValue(LoadedModule* module,
+                                         Zone* zone,
+                                         const Object& target,
+                                         ModuleExportKind kind) {
+  switch (kind) {
+    case ModuleExportKind::kField: {
+      if (!target.IsField()) return Object::sentinel().ptr();
+      const Field& field = Field::Cast(target);
+      return ModuleStaticFieldValue(module, field);
+    }
+    case ModuleExportKind::kGetter: {
+      if (!target.IsFunction()) return Object::sentinel().ptr();
+      const Function& getter = Function::Cast(target);
+      const Object& result = Object::Handle(
+          zone, DartEntry::InvokeFunction(getter, Object::empty_array()));
+      if (result.IsError()) {
+        Exceptions::PropagateError(Error::Cast(result));
+        UNREACHABLE();
+      }
+      return result.ptr();
+    }
+    case ModuleExportKind::kFunction:
+      break;
+  }
+  return Object::sentinel().ptr();
+}
+
+static ObjectPtr LookupModuleExportedValue(LoadedModule* module,
+                                           Zone* zone,
+                                           const String& name) {
+  Object& target = Object::Handle(
+      zone, LookupModuleExportTarget(module, zone, name,
+                                     ModuleExportKind::kField));
+  if (!target.IsNull()) {
+    const Object& value = Object::Handle(
+        zone, ReadModuleExportedValue(module, zone, target,
+                                      ModuleExportKind::kField));
+    if (!value.IsSentinel()) return value.ptr();
+  }
+
+  target = LookupModuleExportTarget(module, zone, name,
+                                    ModuleExportKind::kGetter);
+  if (!target.IsNull()) {
+    return ReadModuleExportedValue(module, zone, target,
+                                   ModuleExportKind::kGetter);
+  }
+  return Object::sentinel().ptr();
+}
+
 // Converts GrowableObjectArray to a fixed Array (used for args / arg_names).
 static ArrayPtr GrowableToArray(Zone* zone, const GrowableObjectArray& list) {
   const intptr_t len = list.Length();
@@ -524,6 +613,12 @@ DEFINE_NATIVE_ENTRY(Module_getValue, 0, 2) {
   GET_NON_NULL_NATIVE_ARGUMENT(String, value_name, arguments->NativeArgAt(1));
 
   LoadedModule* m = GetLoadedModuleFromObject(thread, zone, module_obj);
+  const Object& exported_value =
+      Object::Handle(zone, LookupModuleExportedValue(m, zone, value_name));
+  if (!exported_value.IsSentinel()) {
+    return exported_value.ptr();
+  }
+
   const GrowableObjectArray& libs =
       GrowableObjectArray::Handle(zone, m->object_store->libraries());
   if (!libs.IsNull()) {
