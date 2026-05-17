@@ -7202,6 +7202,13 @@ class ProgramSerializationRoots : public SerializationRoots {
       }
     }
 #endif
+
+    const Array& module_abi_manifest =
+        Array::Handle(s->thread()->zone(),
+                      s->thread()->isolate_group()->module_abi_manifest());
+    if (!module_abi_manifest.IsNull()) {
+      s->Push(module_abi_manifest.ptr());
+    }
   }
 
   void WriteRoots(Serializer* s) {
@@ -7242,6 +7249,8 @@ class ProgramSerializationRoots : public SerializationRoots {
     // The dispatch table is serialized only for precompiled snapshots.
     s->WriteDispatchTable(dispatch_table_entries_);
 
+    s->WriteRootRef(s->thread()->isolate_group()->module_abi_manifest(),
+                    "module-abi-manifest");
     s->WriteUnsigned64(
         s->thread()->isolate_group()->module_abi_manifest_hash());
     s->WriteUnsigned(s->thread()->isolate_group()->module_abi_selector_count());
@@ -7311,9 +7320,11 @@ class ProgramDeserializationRoots : public DeserializationRoots {
     // Deserialize dispatch table (when applicable)
     d->ReadDispatchTable();
 
+    Array& module_abi_manifest = Array::Handle(d->zone());
+    module_abi_manifest ^= d->ReadRef();
     const uint64_t module_abi_manifest_hash = d->ReadUnsigned64();
-    d->thread()->isolate_group()->set_module_abi_manifest_hash(
-        module_abi_manifest_hash);
+    d->thread()->isolate_group()->SetModuleAbiManifest(
+        module_abi_manifest, module_abi_manifest_hash);
     const intptr_t module_abi_selector_count = d->ReadUnsigned();
     if (static_cast<uint64_t>(module_abi_selector_count) >
         static_cast<uint64_t>(0xffffffffu)) {
@@ -7560,8 +7571,10 @@ class ModuleDeserializationRoots : public DeserializationRoots {
     // Read and install the module's dispatch table (extends host coverage).
     d->ReadModuleDispatchTable();
 
-    // Consumes the program-level ABI hash emitted by ProgramSerializationRoots.
-    // The loader-visible module ABI hash is carried by kDartModuleAbiData.
+    // Consumes the program-level ABI manifest/hash emitted by
+    // ProgramSerializationRoots. The loader-visible module ABI hash is carried
+    // by kDartModuleAbiData.
+    d->ReadRef();
     d->ReadUnsigned64();
     const intptr_t serialized_selector_count = d->ReadUnsigned();
     const intptr_t expected_selector_count = ModuleRuntimeIdCountToIntptr(

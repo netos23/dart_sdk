@@ -69,9 +69,12 @@ Implemented today:
     serialized module dispatch table entry count.
 - `ImageWriter::WriteModuleAbiData` emits the ABI sidecar as
   `kDartModuleAbiData` for module AOT images.
-- `ProgramSerializationRoots` serializes the host/module ABI manifest hash and
-  dispatch selector count. `ProgramDeserializationRoots` restores both and
-  seeds the next module-private selector id.
+- `ProgramSerializationRoots` serializes the host/module ABI manifest payload,
+  manifest hash, and dispatch selector count. `ProgramDeserializationRoots`
+  restores the payload/hash and seeds the next module-private selector id.
+- The embedded host ABI manifest payload is currently opaque to the VM: it is
+  retained as a JSON string inside the isolate-group manifest array for later
+  semantic import/linking work.
 - `Precompiler::FinalizeDispatchTable` records the dispatch table generator's
   selector count in the `IsolateGroup`.
 - Module deserialization through
@@ -127,6 +130,9 @@ Implemented today:
   - module AOT outputs can use `--module-abi=<path>`;
   - both paths pass the manifest hash to `gen_snapshot` through
     `--module_abi_manifest_hash`.
+  - host `--emit-module-abi` also passes the manifest JSON path through
+    `--module_abi_manifest`, so the host AOT snapshot embeds the manifest
+    payload in the isolate group.
   - if host compilation also supplies a dynamic interface to the kernel front
     end, `--emit-module-abi` captures the detailed dynamic-interface dump and
     includes those semantic entries in the manifest.
@@ -1473,8 +1479,9 @@ Current status and work items:
 
 ### Build Tool Flow
 
-The low-level flow is through `gen_snapshot`'s `app-aot-module` snapshot kind
-and `FLAG_module_abi_manifest_hash`. The Stage 1 user-facing flow is:
+The low-level flow is through `gen_snapshot`'s `app-aot-module` snapshot kind,
+`FLAG_module_abi_manifest_hash`, and host-side `FLAG_module_abi_manifest`
+embedding. The Stage 1 user-facing flow is:
 
 The build flow should become explicit:
 
@@ -1555,9 +1562,10 @@ Current progress relative to these stages:
   and limitations.
 - Stage 1 is implemented as infrastructure: ABI header/hash/runtime-id
   scaffolding, load-time compatibility checks, deterministic manifest envelope,
-  host `--emit-module-abi`, module `--module-abi` plumbing, and semantic
-  manifest entries derived from the detailed dynamic-interface dump. The
-  manifest still lacks layout/signature/type records and selector metadata.
+  host `--emit-module-abi`, module `--module-abi` plumbing, host snapshot
+  manifest payload embedding, and semantic manifest entries derived from the
+  detailed dynamic-interface dump. The manifest still lacks layout/signature/type
+  records and selector metadata.
 - Stage 3 has early selector-count plumbing and module-private selector id
   reservation, but not stable selector keys, manifest offsets, or merge-by-key.
 - Stage 5 has the explicit `Module.lookupFunction<T>` closure path and a flat
@@ -1572,7 +1580,8 @@ Current progress relative to these stages:
 ### Stage 1: ABI Manifest Infrastructure
 
 - Add manifest model in `pkg/vm`.
-- Emit manifest from host precompiler.
+- Emit manifest from the host build flow.
+- Embed host manifest payload/hash in the host AOT snapshot.
 - Consume manifest in module precompiler.
 - Add load-time ABI hash validation.
 

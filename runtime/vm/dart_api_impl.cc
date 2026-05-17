@@ -5,6 +5,8 @@
 #include "include/dart_api.h"
 #include "include/dart_native_api.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -95,6 +97,11 @@ DEFINE_FLAG(uint64_t,
             module_abi_manifest_hash,
             0,
             "ABI manifest hash to embed in dart:module AOT snapshots.");
+DEFINE_FLAG(charp,
+            module_abi_manifest,
+            nullptr,
+            "Path to dart:module ABI manifest JSON to embed in host AOT "
+            "snapshots.");
 
 #define CHECK_ERROR_HANDLE(error)                                              \
   {                                                                            \
@@ -6674,7 +6681,88 @@ static ModuleAbiRuntimeIds CurrentModuleAbiRuntimeIds(Thread* thread) {
   return runtime_ids;
 }
 
-static void CreateAppAOTSnapshot(
+static char* ReadModuleAbiManifestFile(const char* path, const char** error) {
+  FILE* file = fopen(path, "rb");
+  if (file == nullptr) {
+    *error = "open failed";
+    return nullptr;
+  }
+
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    *error = "seek failed";
+    return nullptr;
+  }
+  const long file_size_long = ftell(file);
+  if (file_size_long < 0) {
+    fclose(file);
+    *error = "size query failed";
+    return nullptr;
+  }
+  if (static_cast<uint64_t>(file_size_long) >
+      static_cast<uint64_t>(kIntptrMax)) {
+    fclose(file);
+    *error = "file is too large";
+    return nullptr;
+  }
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    *error = "seek failed";
+    return nullptr;
+  }
+
+  const size_t file_size = static_cast<size_t>(file_size_long);
+  char* buffer = reinterpret_cast<char*>(malloc(file_size + 1));
+  if (buffer == nullptr) {
+    fclose(file);
+    *error = "allocation failed";
+    return nullptr;
+  }
+  const size_t read_size = fread(buffer, 1, file_size, file);
+  fclose(file);
+  if (read_size != file_size) {
+    free(buffer);
+    *error = "read failed";
+    return nullptr;
+  }
+
+  buffer[file_size] = '\0';
+  return buffer;
+}
+
+static Dart_Handle SetModuleAbiManifestFromFlags(Thread* thread) {
+  IsolateGroup* isolate_group = thread->isolate_group();
+  if (FLAG_module_abi_manifest_hash != 0) {
+    isolate_group->set_module_abi_manifest_hash(FLAG_module_abi_manifest_hash);
+  }
+  if (FLAG_module_abi_manifest == nullptr) {
+    return Api::Success();
+  }
+  if (isolate_group->module_abi_manifest_hash() == 0) {
+    return Api::NewError(
+        "--module_abi_manifest requires --module_abi_manifest_hash.");
+  }
+
+  const char* error = nullptr;
+  char* manifest_json =
+      ReadModuleAbiManifestFile(FLAG_module_abi_manifest, &error);
+  if (manifest_json == nullptr) {
+    return Api::NewError("Failed to read module ABI manifest '%s': %s.",
+                         FLAG_module_abi_manifest, error);
+  }
+
+  const String& manifest_text =
+      String::Handle(thread->zone(), String::New(manifest_json, Heap::kOld));
+  free(manifest_json);
+  const Array& manifest =
+      Array::Handle(thread->zone(), Array::New(1, Heap::kOld));
+  manifest.SetAt(0, manifest_text);
+  isolate_group->SetModuleAbiManifest(
+      manifest, isolate_group->module_abi_manifest_hash());
+  return Api::Success();
+}
+
+static Dart_Handle CreateAppAOTSnapshot(
     Dart_StreamingWriteCallback callback,
     void* callback_data,
     bool strip,
@@ -6691,9 +6779,15 @@ static void CreateAppAOTSnapshot(
   NOT_IN_PRODUCT(TimelineBeginEndScope tbes2(T, Timeline::GetIsolateStream(),
                                              "WriteAppAOTSnapshot"));
 
-  if (FLAG_module_abi_manifest_hash != 0) {
-    T->isolate_group()->set_module_abi_manifest_hash(
-        FLAG_module_abi_manifest_hash);
+  if (snapshot_kind == Snapshot::kFullAOTModule &&
+      FLAG_module_abi_manifest != nullptr) {
+    return Api::NewError(
+        "--module_abi_manifest is only supported for host AOT snapshots.");
+  }
+
+  Dart_Handle manifest_result = SetModuleAbiManifestFromFlags(T);
+  if (Api::IsError(manifest_result)) {
+    return manifest_result;
   }
 
   ZoneWriteStream vm_snapshot_data(T->zone(), FullSnapshotWriter::kInitialSize);
@@ -6781,14 +6875,15 @@ static void CreateAppAOTSnapshot(
                                 deobfuscation_trie, debug_so, so);
     use_output_writer(&blob_writer);
   }
+  return Api::Success();
 }
 
-static void Split(Dart_CreateLoadingUnitCallback next_callback,
-                  void* next_callback_data,
-                  bool strip,
-                  Dart_AotBinaryFormat format,
-                  Dart_StreamingWriteCallback write_callback,
-                  Dart_StreamingCloseCallback close_callback) {
+static Dart_Handle Split(Dart_CreateLoadingUnitCallback next_callback,
+                         void* next_callback_data,
+                         bool strip,
+                         Dart_AotBinaryFormat format,
+                         Dart_StreamingWriteCallback write_callback,
+                         Dart_StreamingCloseCallback close_callback) {
   Thread* T = Thread::Current();
   ProgramVisitor::AssignUnits(T);
 
@@ -6818,10 +6913,19 @@ static void Split(Dart_CreateLoadingUnitCallback next_callback,
       next_callback(next_callback_data, id, &write_callback_data,
                     &write_debug_callback_data);
     }
-    CreateAppAOTSnapshot(write_callback, write_callback_data, strip, format,
-                         write_debug_callback_data, &data, data[id],
-                         program_hash, /*identifier=*/nullptr,
-                         /*path=*/nullptr);
+    Dart_Handle result =
+        CreateAppAOTSnapshot(write_callback, write_callback_data, strip, format,
+                             write_debug_callback_data, &data, data[id],
+                             program_hash, /*identifier=*/nullptr,
+                             /*path=*/nullptr);
+    if (Api::IsError(result)) {
+      TransitionVMToNative transition(T);
+      close_callback(write_callback_data);
+      if (write_debug_callback_data != nullptr) {
+        close_callback(write_debug_callback_data);
+      }
+      return result;
+    }
     {
       TransitionVMToNative transition(T);
       close_callback(write_callback_data);
@@ -6830,6 +6934,7 @@ static void Split(Dart_CreateLoadingUnitCallback next_callback,
       }
     }
   }
+  return Api::Success();
 }
 #endif
 
@@ -6851,12 +6956,10 @@ Dart_CreateAppAOTSnapshotAsAssembly(Dart_StreamingWriteCallback callback,
   // Mark as not split.
   T->isolate_group()->object_store()->set_loading_units(Object::null_array());
 
-  CreateAppAOTSnapshot(callback, callback_data, strip,
-                       Dart_AotBinaryFormat_Assembly, debug_callback_data,
-                       nullptr, nullptr, 0, /*identifier=*/nullptr,
-                       /*path=*/nullptr);
-
-  return Api::Success();
+  return CreateAppAOTSnapshot(callback, callback_data, strip,
+                              Dart_AotBinaryFormat_Assembly,
+                              debug_callback_data, nullptr, nullptr, 0,
+                              /*identifier=*/nullptr, /*path=*/nullptr);
 #endif
 }
 
@@ -6878,10 +6981,8 @@ DART_EXPORT Dart_Handle Dart_CreateAppAOTSnapshotAsAssemblies(
   CHECK_NULL(write_callback);
   CHECK_NULL(close_callback);
 
-  Split(next_callback, next_callback_data, strip, Dart_AotBinaryFormat_Assembly,
-        write_callback, close_callback);
-
-  return Api::Success();
+  return Split(next_callback, next_callback_data, strip,
+               Dart_AotBinaryFormat_Assembly, write_callback, close_callback);
 #endif
 }
 
@@ -6930,11 +7031,10 @@ Dart_CreateAppAOTSnapshotAsElf(Dart_StreamingWriteCallback callback,
   // Mark as not split.
   T->isolate_group()->object_store()->set_loading_units(Object::null_array());
 
-  CreateAppAOTSnapshot(callback, callback_data, strip, Dart_AotBinaryFormat_Elf,
-                       debug_callback_data, nullptr, nullptr, 0,
-                       /*identifier=*/nullptr, /*path=*/nullptr);
-
-  return Api::Success();
+  return CreateAppAOTSnapshot(callback, callback_data, strip,
+                              Dart_AotBinaryFormat_Elf, debug_callback_data,
+                              nullptr, nullptr, 0, /*identifier=*/nullptr,
+                              /*path=*/nullptr);
 #endif
 }
 
@@ -6956,10 +7056,8 @@ Dart_CreateAppAOTSnapshotAsElfs(Dart_CreateLoadingUnitCallback next_callback,
   CHECK_NULL(write_callback);
   CHECK_NULL(close_callback);
 
-  Split(next_callback, next_callback_data, strip, Dart_AotBinaryFormat_Elf,
-        write_callback, close_callback);
-
-  return Api::Success();
+  return Split(next_callback, next_callback_data, strip,
+               Dart_AotBinaryFormat_Elf, write_callback, close_callback);
 #endif
 }
 
@@ -6984,11 +7082,9 @@ Dart_CreateAppAOTSnapshotAsBinary(Dart_AotBinaryFormat format,
   // Mark as not split.
   T->isolate_group()->object_store()->set_loading_units(Object::null_array());
 
-  CreateAppAOTSnapshot(callback, callback_data, strip, format,
-                       debug_callback_data, nullptr, nullptr, 0, identifier,
-                       path);
-
-  return Api::Success();
+  return CreateAppAOTSnapshot(callback, callback_data, strip, format,
+                              debug_callback_data, nullptr, nullptr, 0,
+                              identifier, path);
 #endif
 }
 
@@ -7013,11 +7109,9 @@ Dart_CreateModuleAOTSnapshotAsBinary(Dart_AotBinaryFormat format,
   // Module snapshots are never split into loading units.
   T->isolate_group()->object_store()->set_loading_units(Object::null_array());
 
-  CreateAppAOTSnapshot(callback, callback_data, strip, format,
-                       debug_callback_data, nullptr, nullptr, 0, identifier,
-                       path, Snapshot::kFullAOTModule);
-
-  return Api::Success();
+  return CreateAppAOTSnapshot(callback, callback_data, strip, format,
+                              debug_callback_data, nullptr, nullptr, 0,
+                              identifier, path, Snapshot::kFullAOTModule);
 #endif
 }
 

@@ -770,7 +770,10 @@ Remove debugging information from the output and save it separately to the speci
           '(${manifest.hashHex}).',
         );
       }
-      return <String>['--module_abi_manifest_hash=${manifest.hash}'];
+      return <String>[
+        '--module_abi_manifest_hash=${manifest.hash}',
+        '--module_abi_manifest=$emitModuleAbi',
+      ];
     }
 
     if (moduleAbi != null) {
