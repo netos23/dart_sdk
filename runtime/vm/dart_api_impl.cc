@@ -6658,6 +6658,9 @@ static ModuleAbiRuntimeIds CurrentModuleAbiRuntimeIds(Thread* thread) {
   runtime_ids.private_class_count = RuntimeIdCountToUint32(
       isolate_group->class_table()->NumCids() - kNumPredefinedCids,
       "private class");
+  runtime_ids.private_selector_count = RuntimeIdCountToUint32(
+      isolate_group->module_abi_selector_count(),
+      "private selector");
 
   const Array& dispatch_table_entries = Array::Handle(
       thread->zone(),

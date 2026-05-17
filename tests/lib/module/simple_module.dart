@@ -5,6 +5,14 @@ String puppyName = "Puppy";
 
 @pragma("vm:entry-point")
 @pragma("vm:never-inline")
+int answer([int offset = 0]) => 42 + offset;
+
+@pragma("vm:entry-point")
+@pragma("vm:never-inline")
+int answerWithOffset(int offset) => answer(offset);
+
+@pragma("vm:entry-point")
+@pragma("vm:never-inline")
 int trinHero(Hero hero) {
   print("Trin");
   final iter = Random().nextInt(10);

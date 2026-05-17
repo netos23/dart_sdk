@@ -3,6 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
@@ -14,6 +15,7 @@ import 'package:front_end/src/api_prototype/compiler_options.dart'
 import 'package:hooks_runner/hooks_runner.dart' show Target;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
+import 'package:vm/module_abi_manifest.dart';
 import 'package:vm/target_os.dart';
 
 import '../core.dart';
@@ -521,6 +523,17 @@ Remove debugging information from the output and save it separately to the speci
         valueHelp: 'path',
         help: 'Path to output Ninja depfile',
       )
+      ..addOption(
+        'emit-module-abi',
+        valueHelp: 'path',
+        help: 'Write a dart:module ABI manifest for modules compiled against '
+            'this host output.',
+      )
+      ..addOption(
+        'module-abi',
+        valueHelp: 'path',
+        help: 'Read a dart:module ABI manifest produced by the host compile.',
+      )
       ..addMultiOption(
         'extra-gen-snapshot-options',
         help: 'Pass additional options to gen_snapshot.',
@@ -659,8 +672,19 @@ Remove debugging information from the output and save it separately to the speci
       }
     }
 
+    try {
+      _validateModuleAbiOptions(args);
+    } on FormatException catch (e) {
+      log.stderr('Error: ${e.message}');
+      return compileErrorExitCode;
+    }
+
     final tempDir = Directory.systemTemp.createTempSync();
     try {
+      final detailedDynamicInterfaceFile =
+          args.option('emit-module-abi') != null
+              ? File(path.join(tempDir.path, 'module_abi_detailed.json'))
+              : null;
       final kernelGenerator = KernelGenerator(
         genSnapshot: genSnapshotBinary,
         targetDartAotRuntime: dartAotRuntimeBinary,
@@ -679,10 +703,22 @@ Remove debugging information from the output and save it separately to the speci
         depFile: args.option('depfile'),
       );
       final snapshotGenerator = await kernelGenerator.generate(
-        extraOptions: args.multiOption('extra-gen-kernel-options'),
+        extraOptions: [
+          ...args.multiOption('extra-gen-kernel-options'),
+          if (detailedDynamicInterfaceFile != null)
+            '--dump-detailed-dynamic-interface='
+                '${detailedDynamicInterfaceFile.path}',
+        ],
+      );
+      final moduleAbiSnapshotOptions = _moduleAbiSnapshotOptions(
+        args,
+        detailedDynamicInterfaceFile,
       );
       await snapshotGenerator.generate(
-        extraOptions: args.multiOption('extra-gen-snapshot-options'),
+        extraOptions: [
+          ...args.multiOption('extra-gen-snapshot-options'),
+          ...moduleAbiSnapshotOptions,
+        ],
       );
       return 0;
     } catch (e, st) {
@@ -695,6 +731,79 @@ Remove debugging information from the output and save it separately to the speci
     } finally {
       await tempDir.delete(recursive: true);
     }
+  }
+
+  void _validateModuleAbiOptions(ArgResults args) {
+    final emitModuleAbi = args.option('emit-module-abi');
+    final moduleAbi = args.option('module-abi');
+    if (emitModuleAbi != null && moduleAbi != null) {
+      usageException(
+        'Only one of --emit-module-abi and --module-abi may be specified.',
+      );
+    }
+    if (format == Kind.module) {
+      if (emitModuleAbi != null) {
+        usageException(
+          '--emit-module-abi is only supported for host AOT outputs.',
+        );
+      }
+    } else if (moduleAbi != null) {
+      usageException('--module-abi is only supported for dart compile module.');
+    }
+  }
+
+  List<String> _moduleAbiSnapshotOptions(
+    ArgResults args,
+    File? detailedDynamicInterfaceFile,
+  ) {
+    final emitModuleAbi = args.option('emit-module-abi');
+    final moduleAbi = args.option('module-abi');
+
+    if (emitModuleAbi != null) {
+      final manifest = _manifestFromDetailedDynamicInterface(
+        detailedDynamicInterfaceFile,
+      );
+      manifest.writeToFileSync(File(emitModuleAbi));
+      if (verbose) {
+        log.stdout(
+          'Wrote dart:module ABI manifest $emitModuleAbi '
+          '(${manifest.hashHex}).',
+        );
+      }
+      return <String>['--module_abi_manifest_hash=${manifest.hash}'];
+    }
+
+    if (moduleAbi != null) {
+      final manifest = DartModuleAbiManifest.readFromFileSync(File(moduleAbi));
+      if (verbose) {
+        log.stdout(
+          'Using dart:module ABI manifest $moduleAbi (${manifest.hashHex}).',
+        );
+      }
+      return <String>['--module_abi_manifest_hash=${manifest.hash}'];
+    }
+
+    return const <String>[];
+  }
+
+  DartModuleAbiManifest _manifestFromDetailedDynamicInterface(
+    File? detailedDynamicInterfaceFile,
+  ) {
+    if (detailedDynamicInterfaceFile == null ||
+        !detailedDynamicInterfaceFile.existsSync()) {
+      return DartModuleAbiManifest.empty();
+    }
+    final contents = detailedDynamicInterfaceFile.readAsStringSync();
+    if (contents.trim().isEmpty) {
+      return DartModuleAbiManifest.empty();
+    }
+    final json = jsonDecode(contents);
+    if (json is! Map<String, Object?>) {
+      throw const FormatException(
+        'detailed dynamic interface dump must be a JSON object',
+      );
+    }
+    return DartModuleAbiManifest.fromDetailedDynamicInterfaceJson(json);
   }
 
   /// Returns target platform for cross compilation.

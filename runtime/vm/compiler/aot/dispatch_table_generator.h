@@ -91,6 +91,8 @@ class DispatchTableGenerator {
   explicit DispatchTableGenerator(Zone* zone);
 
   SelectorMap* selector_map() { return &selector_map_; }
+  int32_t selector_count() const { return num_selectors_; }
+  int32_t table_size() const { return table_size_; }
 
   // Find suitable selectors and compute offsets for them.
   void Initialize(ClassTable* table);

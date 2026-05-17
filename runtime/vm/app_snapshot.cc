@@ -785,6 +785,9 @@ class Deserializer : public ThreadStackResource {
                          const InstructionsTable& root_instruction_table,
                          intptr_t deferred_code_start_index,
                          intptr_t deferred_code_end_index);
+  void set_loaded_module(LoadedModule* loaded_module) {
+    loaded_module_ = loaded_module;
+  }
   // Reads a module dispatch table from the current stream position and
   // installs it as the IsolateGroup's dispatch table, extending the host's
   // coverage to include module class CIDs.
@@ -896,6 +899,7 @@ class Deserializer : public ThreadStackResource {
   // user-class CIDs read from the snapshot are shifted up by this amount so
   // that module classes occupy fresh CIDs above the host program's classes.
   intptr_t cid_offset_ = 0;
+  LoadedModule* loaded_module_ = nullptr;
   DeserializationCluster** clusters_;
   const bool is_non_root_unit_;
   InstructionsTable& instructions_table_;
@@ -7240,6 +7244,7 @@ class ProgramSerializationRoots : public SerializationRoots {
 
     s->WriteUnsigned64(
         s->thread()->isolate_group()->module_abi_manifest_hash());
+    s->WriteUnsigned(s->thread()->isolate_group()->module_abi_selector_count());
   }
 
   virtual const CompressedStackMaps& canonicalized_stack_map_entries() const {
@@ -7309,6 +7314,13 @@ class ProgramDeserializationRoots : public DeserializationRoots {
     const uint64_t module_abi_manifest_hash = d->ReadUnsigned64();
     d->thread()->isolate_group()->set_module_abi_manifest_hash(
         module_abi_manifest_hash);
+    const intptr_t module_abi_selector_count = d->ReadUnsigned();
+    if (static_cast<uint64_t>(module_abi_selector_count) >
+        static_cast<uint64_t>(0xffffffffu)) {
+      FATAL("Module ABI selector count is out of range");
+    }
+    d->thread()->isolate_group()->SetModuleAbiSelectorCount(
+        static_cast<uint32_t>(module_abi_selector_count));
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
@@ -7419,16 +7431,77 @@ static void InitializeModuleLinkTables(LoadedModule* loaded_module) {
   loaded_module->class_id_bindings = empty;
 }
 
+static ArrayPtr BuildSmiRangeBindingTable(Zone* zone,
+                                          intptr_t base_id,
+                                          intptr_t count) {
+  if (count == 0) return Object::empty_array().ptr();
+
+  ASSERT(count > 0);
+  ASSERT(base_id >= 0);
+  ASSERT(base_id <= kIntptrMax - (count - 1));
+  ASSERT(Smi::IsValid(base_id));
+  ASSERT(Smi::IsValid(base_id + count - 1));
+
+  const Array& bindings = Array::Handle(zone, Array::New(count, Heap::kOld));
+  for (intptr_t i = 0; i < count; i++) {
+    bindings.SetAt(i, Smi::Handle(zone, Smi::New(base_id + i)));
+  }
+  return bindings.ptr();
+}
+
+static intptr_t ModuleRuntimeIdCountToIntptr(uint32_t count,
+                                             const char* name) {
+  if (static_cast<uint64_t>(count) > static_cast<uint64_t>(kIntptrMax)) {
+    FATAL("Module ABI %s count is out of range", name);
+  }
+  return static_cast<intptr_t>(count);
+}
+
 static void ReserveModuleClassTableSlots(IsolateGroup* isolate_group,
+                                         Zone* zone,
                                          LoadedModule* loaded_module) {
-  const intptr_t private_class_count =
-      loaded_module->abi_runtime_ids.private_class_count;
+  const intptr_t private_class_count = ModuleRuntimeIdCountToIntptr(
+      loaded_module->abi_runtime_ids.private_class_count, "private class");
+  loaded_module->class_count = private_class_count;
   if (private_class_count == 0) return;
 
+  if (private_class_count > kIntptrMax - loaded_module->base_class_id) {
+    FATAL("Too many module class IDs to reserve");
+  }
   const intptr_t last_class_id =
       loaded_module->base_class_id + private_class_count - 1;
   isolate_group->class_table()->AllocateIndex(last_class_id);
-  loaded_module->class_count = private_class_count;
+  loaded_module->class_id_bindings = BuildSmiRangeBindingTable(
+      zone, loaded_module->base_class_id, private_class_count);
+}
+
+static void ReserveModuleSelectorIds(IsolateGroup* isolate_group,
+                                     Zone* zone,
+                                     LoadedModule* loaded_module) {
+  const intptr_t selector_count = ModuleRuntimeIdCountToIntptr(
+      loaded_module->abi_runtime_ids.private_selector_count,
+      "private selector");
+  loaded_module->base_selector_id =
+      isolate_group->ReserveModuleSelectorIds(selector_count);
+  loaded_module->selector_count = selector_count;
+  loaded_module->selector_bindings = BuildSmiRangeBindingTable(
+      zone, loaded_module->base_selector_id, selector_count);
+}
+
+static void ReserveModuleDispatchTableSlots(LoadedModule* loaded_module,
+                                            intptr_t cid_offset) {
+  const intptr_t module_length = ModuleRuntimeIdCountToIntptr(
+      loaded_module->abi_runtime_ids.dispatch_table_entry_count,
+      "dispatch table entry");
+  loaded_module->dispatch_table_entry_count = module_length;
+  if (module_length == 0) return;
+
+  if (cid_offset != 0 && module_length > kIntptrMax - cid_offset) {
+    FATAL("Too many module dispatch table entries to reserve");
+  }
+  const intptr_t reserved_length =
+      cid_offset == 0 ? module_length : cid_offset + module_length;
+  loaded_module->dispatch_table = new DispatchTable(reserved_length);
 }
 
 // DeserializationRoots for kFullAOTModule snapshots.
@@ -7490,6 +7563,15 @@ class ModuleDeserializationRoots : public DeserializationRoots {
     // Consumes the program-level ABI hash emitted by ProgramSerializationRoots.
     // The loader-visible module ABI hash is carried by kDartModuleAbiData.
     d->ReadUnsigned64();
+    const intptr_t serialized_selector_count = d->ReadUnsigned();
+    const intptr_t expected_selector_count = ModuleRuntimeIdCountToIntptr(
+        loaded_module_->abi_runtime_ids.private_selector_count,
+        "private selector");
+    if (expected_selector_count != 0 &&
+        expected_selector_count != serialized_selector_count) {
+      FATAL("Module ABI selector count mismatch: expected %" Pd ", found %" Pd,
+            expected_selector_count, serialized_selector_count);
+    }
   }
 
   void PostLoad(Deserializer* d, const Array& refs) override {
@@ -9557,6 +9639,13 @@ void Deserializer::ReadDispatchTable(
 void Deserializer::ReadModuleDispatchTable() {
 #if defined(DART_PRECOMPILED_RUNTIME)
   const intptr_t module_length = stream_.ReadUnsigned();
+  if (loaded_module_ != nullptr &&
+      loaded_module_->dispatch_table_entry_count != 0 &&
+      loaded_module_->dispatch_table_entry_count != module_length) {
+    FATAL("Module ABI dispatch table entry count mismatch: expected %" Pd
+          ", found %" Pd,
+          loaded_module_->dispatch_table_entry_count, module_length);
+  }
   if (module_length == 0) return;
 
   stream_.ReadUnsigned();  // first_code_id (not needed for the module table)
@@ -9600,7 +9689,14 @@ void Deserializer::ReadModuleDispatchTable() {
   if (cid_offset_ == 0) {
     // No CID remapping: the module's table already covers the right CIDs.
     // (Host has no user classes, or module was compiled with matching CIDs.)
-    auto* table = new DispatchTable(module_length);
+    DispatchTable* table =
+        loaded_module_ == nullptr ? nullptr : loaded_module_->dispatch_table;
+    if (table != nullptr) {
+      ASSERT(table->length() == module_length);
+      loaded_module_->dispatch_table = nullptr;
+    } else {
+      table = new DispatchTable(module_length);
+    }
     memmove(table->array(), module_entries, module_length * sizeof(uword));
     IG->set_dispatch_table(table);
     return;
@@ -9616,7 +9712,14 @@ void Deserializer::ReadModuleDispatchTable() {
   //             = cid_offset_ + module_length
   const intptr_t cids_before = kNumPredefinedCids + cid_offset_;
   const intptr_t new_length = cid_offset_ + module_length;
-  auto* table = new DispatchTable(new_length);
+  DispatchTable* table =
+      loaded_module_ == nullptr ? nullptr : loaded_module_->dispatch_table;
+  if (table != nullptr) {
+    ASSERT(table->length() == new_length);
+    loaded_module_->dispatch_table = nullptr;
+  } else {
+    table = new DispatchTable(new_length);
+  }
   uword* new_arr = table->array();
 
   // Initialise everything to null_entry.
@@ -10464,7 +10567,11 @@ ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
   loaded_module->class_count = 0;
   InitializeModuleLinkTables(loaded_module);
   *out_module_id = isolate_group()->AddLoadedModule(loaded_module);
-  ReserveModuleClassTableSlots(isolate_group(), loaded_module);
+  ReserveModuleClassTableSlots(isolate_group(), thread_->zone(),
+                               loaded_module);
+  ReserveModuleSelectorIds(isolate_group(), thread_->zone(), loaded_module);
+  ReserveModuleDispatchTableSlots(loaded_module, deserializer.cid_offset());
+  deserializer.set_loaded_module(loaded_module);
 
   ModuleDeserializationRoots roots(module_object_store, loaded_module);
   deserializer.Deserialize(&roots);
@@ -10472,8 +10579,14 @@ ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
   // The module dispatch table was installed on the IsolateGroup by
   // ReadModuleDispatchTable; the old pointer is no longer valid.
   loaded_module->dispatch_table = nullptr;
-  loaded_module->class_count =
+  const intptr_t actual_class_count =
       isolate_group()->class_table()->NumCids() - cids_before;
+  if (loaded_module->class_count != 0 &&
+      loaded_module->class_count != actual_class_count) {
+    FATAL("Module ABI class count mismatch: expected %" Pd ", found %" Pd,
+          loaded_module->class_count, actual_class_count);
+  }
+  loaded_module->class_count = actual_class_count;
 
   return ApiError::null();
 }

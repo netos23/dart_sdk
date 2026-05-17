@@ -336,6 +336,8 @@ IsolateGroup::IsolateGroup(std::shared_ptr<IsolateGroupSource> source,
       heap_(nullptr),
       module_abi_manifest_(Array::null()),
       module_abi_manifest_hash_(0),
+      module_abi_selector_count_(0),
+      next_module_selector_id_(0),
       saved_unlinked_calls_(Array::null()),
       initial_field_table_(new FieldTable(/*isolate=*/nullptr)),
       sentinel_field_table_(new FieldTable(/*isolate=*/nullptr)),
@@ -521,6 +523,17 @@ void IsolateGroup::SetModuleAbiManifest(const Array& manifest,
                                         uint64_t manifest_hash) {
   module_abi_manifest_ = manifest.ptr();
   module_abi_manifest_hash_ = manifest_hash;
+}
+
+intptr_t IsolateGroup::ReserveModuleSelectorIds(intptr_t selector_count) {
+  // Caller must hold program_lock() write.
+  ASSERT(selector_count >= 0);
+  if (selector_count > kIntptrMax - next_module_selector_id_) {
+    FATAL("Too many module selector IDs to reserve: %" Pd, selector_count);
+  }
+  const intptr_t base_selector_id = next_module_selector_id_;
+  next_module_selector_id_ += selector_count;
+  return base_selector_id;
 }
 
 void IsolateGroup::RegisterIsolate(Isolate* isolate) {

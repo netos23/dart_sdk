@@ -2052,6 +2052,7 @@ void Precompiler::FinalizeDispatchTable() {
   HANDLESCOPE(T);
   // Build the entries used to serialize the dispatch table before
   // dropping functions, as we may clear references to Code objects.
+  IG->SetModuleAbiSelectorCount(dispatch_table_generator_->selector_count());
   const auto& entries =
       Array::Handle(Z, dispatch_table_generator_->BuildCodeArray());
   IG->object_store()->set_dispatch_table_code_entries(entries);

@@ -352,12 +352,20 @@ struct LoadedModule {
   intptr_t base_class_id = 0;
   // Number of classes introduced by this module.
   intptr_t class_count = 0;
+  // First private selector id reserved for this module.
+  intptr_t base_selector_id = 0;
+  // Number of private selectors reserved for this module.
+  intptr_t selector_count = 0;
+  // Number of dispatch table entries reserved while loading this module.
+  intptr_t dispatch_table_entry_count = 0;
   // ABI-aware link tables. These are intentionally VM arrays first so the
   // snapshot format can stabilize before introducing bespoke C++ containers.
   ArrayPtr abi_imports;
   ArrayPtr exports;
   ArrayPtr export_link_slots;
+  // Local module-private selector id -> reserved selector id.
   ArrayPtr selector_bindings;
+  // Local module-private class index -> global CID.
   ArrayPtr class_id_bindings;
 
   LoadedModule();
@@ -494,7 +502,15 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   void set_module_abi_manifest_hash(uint64_t manifest_hash) {
     module_abi_manifest_hash_ = manifest_hash;
   }
+  uint32_t module_abi_selector_count() const {
+    return module_abi_selector_count_;
+  }
+  void SetModuleAbiSelectorCount(uint32_t selector_count) {
+    module_abi_selector_count_ = selector_count;
+    next_module_selector_id_ = selector_count;
+  }
   void SetModuleAbiManifest(const Array& manifest, uint64_t manifest_hash);
+  intptr_t ReserveModuleSelectorIds(intptr_t selector_count);
 
   ClassTableAllocator* class_table_allocator() {
     return &class_table_allocator_;
@@ -1031,6 +1047,8 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   MallocGrowableArray<LoadedModule*> loaded_modules_;
   ArrayPtr module_abi_manifest_;
   uint64_t module_abi_manifest_hash_ = 0;
+  uint32_t module_abi_selector_count_ = 0;
+  intptr_t next_module_selector_id_ = 0;
   ArrayPtr saved_unlinked_calls_;
   std::shared_ptr<FieldTable> initial_field_table_;
   std::shared_ptr<FieldTable> sentinel_field_table_;

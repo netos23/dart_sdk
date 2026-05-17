@@ -49,7 +49,11 @@ host-owned ABI universe. Module-private objects can still cross the boundary as
 
 ## Current State
 
-The current `dart:module` work adds:
+The current `dart:module` implementation is an explicit AOT module
+loading/calling path plus ABI scaffolding. It does not yet provide transparent
+typed direct calls between independently compiled host and module code.
+
+Implemented today:
 
 - `app-aot-module` snapshot generation in `bin/gen_snapshot.cc`.
 - Public API entry points in `include/dart_api.h`:
@@ -57,28 +61,125 @@ The current `dart:module` work adds:
   - `Dart_CreateModuleAOTSnapshotAsBinary`.
 - Runtime loading through `lib/module.cc`.
 - `Snapshot::kFullAOTModule`.
+- A VM ABI sidecar in `vm/module_abi.{h,cc}`:
+  - fixed `"DMAB"` header, currently format version 2;
+  - SDK hash, compiler-flags hash, target architecture, target OS, mode flags;
+  - optional manifest hash;
+  - runtime-id payload for private class count, private selector count, and
+    serialized module dispatch table entry count.
+- `ImageWriter::WriteModuleAbiData` emits the ABI sidecar as
+  `kDartModuleAbiData` for module AOT images.
+- `ProgramSerializationRoots` serializes the host/module ABI manifest hash and
+  dispatch selector count. `ProgramDeserializationRoots` restores both and
+  seeds the next module-private selector id.
+- `Precompiler::FinalizeDispatchTable` records the dispatch table generator's
+  selector count in the `IsolateGroup`.
 - Module deserialization through
   `FullSnapshotReader::ReadModuleSnapshot` in `vm/app_snapshot.cc`.
-- Per-module runtime state in `LoadedModule` in `vm/isolate.h`.
-- A module-specific object store, static field tables, class tracking, and
-  dispatch table extension.
+- Per-module runtime state in `LoadedModule` in `vm/isolate.h`, including:
+  - dynamic library handle and snapshot image pointers;
+  - ABI header/runtime-id data;
+  - module object store;
+  - module static field tables;
+  - deserialized module class tracking;
+  - class-id binding table;
+  - selector binding table;
+  - export and future link tables;
+  - dispatch table reservation state.
+- `ReadModuleSnapshot` currently:
+  - holds `program_lock` write while registering/deserializing a module;
+  - validates the normal snapshot header/features;
+  - reserves a module id;
+  - shifts module-private class CIDs above the host CID range;
+  - reserves class table slots from the ABI runtime-id payload;
+  - reserves module-private selector ids after the host selector count;
+  - preallocates the expected merged dispatch table size when declared;
+  - validates serialized class, selector, and dispatch table counts where
+    runtime-id data is available.
+- `ModuleDeserializationRoots` reads into a module-specific object store, reads
+  module static field tables, installs the module dispatch table contribution,
+  records deserialized module classes, and builds a flat export table for
+  surviving top-level static fields, regular functions, and getters.
+- `Deserializer::ReadModuleDispatchTable` still merges by the serialized table
+  layout plus CID offset. It can reuse the preallocated table from
+  `LoadedModule`, but it does not yet merge by semantic selector id/key.
+- `LoadedModule::VisitObjectPointers` visits the module object store, static
+  field tables, class list, ABI import/export/link tables, selector bindings,
+  and class-id bindings.
+- Public Dart API currently includes:
+  - `Module.load`;
+  - `Module.getValue<T>`;
+  - `Module.lookupFunction<T>`;
+  - `Module.invokeMethod<T>`;
+  - `Module.invokeStaticMethod<T>`;
+  - `Module.invokeConstructor<T>`.
+- `Module.lookupFunction<T>` returns an implicit closure for a retained
+  top-level regular module function. It is an explicit lookup path, not a
+  generated direct-call/link-slot path.
+- `vm/module_abi_test.cc` covers ABI header/runtime-id encoding, compatibility
+  checks, and export-table layout constants.
+- `pkg/vm/lib/module_abi_manifest.dart` provides the Stage 1 deterministic
+  JSON manifest envelope and 63-bit hash used by tooling. It can also convert
+  the front end's detailed dynamic-interface dump into semantic library, class,
+  and member ABI entries with callable, extendable, and can-be-overridden flags.
+- `dart compile` now has Stage 1 manifest plumbing:
+  - host AOT outputs can use `--emit-module-abi=<path>`;
+  - module AOT outputs can use `--module-abi=<path>`;
+  - both paths pass the manifest hash to `gen_snapshot` through
+    `--module_abi_manifest_hash`.
+  - if host compilation also supplies a dynamic interface to the kernel front
+    end, `--emit-module-abi` captures the detailed dynamic-interface dump and
+    includes those semantic entries in the manifest.
+- `tests/lib/module/module_loads_test.dart` documents the current explicit
+  `Module` API semantics and the no-module-image limitation. It can run against
+  a prebuilt module by passing `-Dmodule.path=<path>`.
 
 Important current code anchors:
 
 - `lib/module.cc`
   - `Module_load`
   - `Module_getValue`
+  - `Module_lookupFunction`
   - `Module_invokeMethod`
   - `Module_invokeStaticMethod`
   - `Module_invokeConstructor`
+- `vm/module_abi.h`
+  - `ModuleAbiHeader`
+  - `ModuleAbiRuntimeIds`
+  - `ModuleAbi`
+  - `ModuleExportTable`
+- `vm/module_abi.cc`
+  - `ModuleAbi::ReadHeader`
+  - `ModuleAbi::ReadRuntimeIds`
+  - `ModuleAbi::WriteHeaderAndRuntimeIds`
+  - `ModuleAbi::ValidateCompatibility`
+- `vm/image_snapshot.{h,cc}`
+  - `ImageWriter::WriteModuleAbiData`
+  - `AssemblyImageWriter::WriteModuleAbiData`
+  - `BlobImageWriter::WriteModuleAbiData`
 - `vm/app_snapshot.cc`
+  - `BuildModuleExportTable`
   - `ModuleDeserializationRoots`
+  - `ReserveModuleClassTableSlots`
+  - `ReserveModuleSelectorIds`
+  - `ReserveModuleDispatchTableSlots`
   - `Deserializer::ReadModuleDispatchTable`
   - `FullSnapshotReader::ReadModuleSnapshot`
 - `vm/isolate.h`
   - `LoadedModule`
   - `IsolateGroup::AddLoadedModule`
   - `IsolateGroup::GetLoadedModule`
+  - `IsolateGroup::SetModuleAbiSelectorCount`
+  - `IsolateGroup::ReserveModuleSelectorIds`
+- `vm/compiler/aot/precompiler.cc`
+  - `Precompiler::FinalizeDispatchTable`
+- `vm/compiler/aot/dispatch_table_generator.h`
+  - exposes selector count and table size for ABI scaffolding.
+- `pkg/vm/lib/module_abi_manifest.dart`
+  - `DartModuleAbiManifest`
+- `pkg/dartdev/lib/src/commands/compile.dart`
+  - `--emit-module-abi`
+  - `--module-abi`
 - `pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart`
   - assigns selector ids used by AOT table dispatch.
 - `vm/compiler/aot/dispatch_table_generator.cc`
@@ -88,9 +189,22 @@ Important current code anchors:
 - `vm/compiler/backend/flow_graph_compiler_*.cc`
   - emits static calls, instance calls, and dispatch table calls.
 
-The current implementation can invoke module functions explicitly through
-`Module.invoke*`. That is not enough for transparent typed calls because the
-compiler and loader do not yet share ABI object identity and selector layout.
+Still missing for typed direct calls:
+
+- Layout, signature, type, selector, and export metadata in the ABI manifest.
+- ABI import reference encoding in the snapshot. Modules still deserialize
+  their own declarations using VM-isolate base objects and shifted private CIDs.
+- Shared ABI `Library`, `Class`, `Function`, `Field`, `Type`, and
+  `TypeArguments` identity.
+- Stable semantic selector keys and manifest-defined dispatch offsets.
+- Dispatch table contributions keyed by selector id/key. The current merge
+  copies serialized rows using raw offsets.
+- Load-time class layout, member signature, field layout, selector, override,
+  and generic type validation beyond header/hash/count checks.
+- Module static calls to host ABI functions through linked imports.
+- Generated host link-slot stubs for module exports.
+- Type-test, cast, generic type, and inherited-field guarantees for shared ABI
+  declarations.
 
 ## Core Invariants
 
@@ -431,6 +545,21 @@ module_snapshot:
   code image
 ```
 
+Currently implemented subset:
+
+- `kDartModuleAbiData` is emitted beside module snapshot data/instructions.
+- The ABI sidecar contains header compatibility data, an optional manifest hash,
+  and fixed runtime-id counts.
+- The normal program roots also serialize a manifest hash and selector count.
+- Tooling can produce and consume a deterministic JSON manifest envelope. The
+  current semantic payload can include dynamic-interface-derived libraries,
+  classes, and members. It does not yet include layout, signature, type,
+  selector, or export records.
+- Module export data is built after deserialization from surviving top-level
+  fields/functions/getters and stored in `LoadedModule::exports`.
+- There is no ABI import table, relocation table, semantic selector table, or
+  serialized signature/layout manifest yet.
+
 ### ABI Import Table
 
 Entries reference host objects by manifest id:
@@ -516,11 +645,11 @@ In `Module_load`:
 
 Under `program_lock` write:
 
-1. Reserve a module id.
+1. Allocate `LoadedModule` and reserve a module id.
 2. Reserve class table slots for module-private classes.
-3. Reserve dispatch table offsets for module-private selectors.
-4. Allocate `LoadedModule`.
-5. Prepare import/export/link tables.
+3. Reserve private selector ids and dispatch table capacity for module-private
+   selectors/classes.
+4. Prepare import/export/link tables.
 
 ### Phase 3: Deserialize With ABI Imports
 
@@ -851,7 +980,45 @@ static field tables, and any link slots.
 Low-level explicit APIs are useful even if generated typed stubs are added
 later.
 
-### Load With ABI
+The current public API in `sdk/lib/module/module.dart` is:
+
+```dart
+class ModuleSource {
+  final String path;
+  ModuleSource(this.path);
+}
+
+class Module {
+  external factory Module.load(ModuleSource source);
+  external T getValue<T>(String valueName);
+  external T lookupFunction<T>(String exportName);
+  external T invokeMethod<T>(
+    String name, {
+    List<Object?> positionalArgs = const [],
+    List<Object?> optionalArgs = const [],
+    Map<String, Object?> namedArgs = const {},
+  });
+  external T invokeStaticMethod<T>(
+    String className,
+    String name, {
+    List<Object?> positionalArgs = const [],
+    List<Object?> optionalArgs = const [],
+    Map<String, Object?> namedArgs = const {},
+  });
+  external T invokeConstructor<T>({
+    String? className,
+    String? constructorName,
+    List<Object?> positionalArgs = const [],
+    List<Object?> optionalArgs = const [],
+    Map<String, Object?> namedArgs = const {},
+  });
+}
+```
+
+The current VM patch casts the result of the native function lookup to `T`.
+Full export-signature validation is still future work.
+
+### Load With ABI Target Shape
 
 ```dart
 class ModuleSource {
@@ -876,7 +1043,9 @@ extension ModuleTypedLookup on Module {
 ```
 
 The VM validates that `T` is compatible with the export signature if enough type
-metadata is available.
+metadata is available. Today `Module.lookupFunction<T>` returns an implicit
+static closure for a retained top-level regular function and relies on the Dart
+cast in the VM patch.
 
 ### Generated API Facade
 
@@ -896,13 +1065,18 @@ calls.
 
 ## Native Runtime Structures
 
-Extend `LoadedModule` with ABI-aware state:
+Current `LoadedModule` ABI-aware state:
 
 ```cpp
 struct LoadedModule {
+  intptr_t id;
   void* dl_handle;
   const uint8_t* isolate_data;
   const uint8_t* isolate_instructions;
+  const uint8_t* abi_data;
+  intptr_t abi_data_size;
+  ModuleAbiHeader abi_header;
+  ModuleAbiRuntimeIds abi_runtime_ids;
 
   ObjectStore* object_store;
 
@@ -913,24 +1087,38 @@ struct LoadedModule {
 
   ObjectPtr* classes;
   intptr_t class_object_count;
+
+  DispatchTable* dispatch_table;
+
   intptr_t base_class_id;
   intptr_t class_count;
+  intptr_t base_selector_id;
+  intptr_t selector_count;
+  intptr_t dispatch_table_entry_count;
 
   ArrayPtr abi_imports;
   ArrayPtr exports;
   ArrayPtr export_link_slots;
   ArrayPtr selector_bindings;
   ArrayPtr class_id_bindings;
-
-  uword instructions_start;
-  uword instructions_end;
 };
 ```
 
 The exact representation can use VM arrays first. C++ structs can be introduced
 after the design stabilizes.
 
-Add to `IsolateGroup`:
+Current `IsolateGroup` module state:
+
+```cpp
+std::unique_ptr<DispatchTable> dispatch_table_;
+MallocGrowableArray<LoadedModule*> loaded_modules_;
+ArrayPtr module_abi_manifest_;
+uint64_t module_abi_manifest_hash_;
+uint32_t module_abi_selector_count_;
+intptr_t next_module_selector_id_;
+```
+
+Future typed-direct-call support still needs:
 
 ```cpp
 AbiManifest* abi_manifest;
@@ -938,7 +1126,7 @@ GlobalSelectorTable* selector_table;
 ExportRegistry* module_export_registry;
 ```
 
-The host snapshot initializes these. Module loading extends them.
+The host snapshot should initialize these. Module loading extends them.
 
 ## Deserialization Details
 
@@ -1168,9 +1356,12 @@ Work items:
    - dispatch table contribution.
 3. During module deserialization, resolve ABI import refs to host objects.
 4. During module deserialization, allocate and install module-private classes in
-   fresh class table slots.
+   fresh class table slots. The current implementation does this with
+   `cid_offset_` plus reserved class table slots.
 5. Apply object-pool and metadata relocations before publishing code.
-6. Extend `ModuleDeserializationRoots` so it records all module GC roots.
+6. Extend ABI root recording as new link tables are added. Current module
+   object-store roots, static field tables, class lists, and ABI link-table
+   arrays are recorded and visited by `LoadedModule::VisitObjectPointers`.
 
 The current `cid_offset_` approach is useful for private module classes, but it
 is not sufficient for shared ABI classes because those must not be shifted
@@ -1186,14 +1377,20 @@ Likely files:
 - `vm/bootstrap_natives.h`
 - `vm/bootstrap_natives.cc`
 
-Work items:
+Current status and work items:
 
-1. Add `Module.lookupFunction<T>(String exportName)`.
-2. Add native lookup for module export table entries.
-3. Validate requested function type against export signature metadata.
-4. Return an implicit closure or a VM-generated link-slot closure.
-5. Add diagnostics for ABI mismatch and missing exports.
-6. Keep existing `Module.invoke*` as a reflective fallback and debugging tool.
+1. `Module.lookupFunction<T>(String exportName)` exists.
+2. Native lookup uses `LoadedModule::exports` first and falls back to scanning
+   module top-level functions.
+3. The current implementation returns an implicit closure for retained
+   top-level regular functions.
+4. Missing export diagnostics exist, but full ABI mismatch diagnostics remain
+   tied to the module ABI header/hash checks.
+5. Requested function type validation against export signature metadata is still
+   missing.
+6. VM-generated link-slot closures/stubs are still missing.
+7. Existing `Module.invoke*` APIs remain as reflective fallback and debugging
+   tools.
 
 The explicit `lookupFunction` API is the fastest path to typed host-to-module
 calls because it can return a normal closure before the compiler grows generated
@@ -1264,15 +1461,20 @@ Likely files:
 - `vm/isolate.h`
 - `vm/object_store.h`
 
-Work items:
+Current status and work items:
 
-1. Extend `LoadedModule::VisitObjectPointers` for ABI import tables, export
-   tables, link slots, selector bindings, and class-id bindings.
-2. Visit any host-owned ABI objects referenced from module-owned tables.
-3. Keep instruction images and dynamic library handles alive for the lifetime of
-   any callable module code.
+1. `LoadedModule::VisitObjectPointers` visits the module object store, static
+   field tables, class list, ABI import/export/link arrays, selector bindings,
+   and class-id bindings.
+2. Continue to visit any future host-owned ABI objects referenced from
+   module-owned tables.
+3. The dynamic library handle is intentionally kept open for module code
+   lifetime; a real unloading policy is still future work.
 
 ### Build Tool Flow
+
+The low-level flow is through `gen_snapshot`'s `app-aot-module` snapshot kind
+and `FLAG_module_abi_manifest_hash`. The Stage 1 user-facing flow is:
 
 The build flow should become explicit:
 
@@ -1344,6 +1546,22 @@ Negative tests:
 - Stack traces across host/module boundary.
 
 ## Implementation Stages
+
+Current progress relative to these stages:
+
+- Stage 0 is implemented for the current explicit API surface: `Module.invoke*`,
+  `getValue`, and `lookupFunction` exist, no constructor debug prints remain,
+  and `tests/lib/module/module_loads_test.dart` documents the current behavior
+  and limitations.
+- Stage 1 is implemented as infrastructure: ABI header/hash/runtime-id
+  scaffolding, load-time compatibility checks, deterministic manifest envelope,
+  host `--emit-module-abi`, module `--module-abi` plumbing, and semantic
+  manifest entries derived from the detailed dynamic-interface dump. The
+  manifest still lacks layout/signature/type records and selector metadata.
+- Stage 3 has early selector-count plumbing and module-private selector id
+  reservation, but not stable selector keys, manifest offsets, or merge-by-key.
+- Stage 5 has the explicit `Module.lookupFunction<T>` closure path and a flat
+  export table, but no signature validation, generated stubs, or link slots.
 
 ### Stage 0: Document Current Semantics
 
