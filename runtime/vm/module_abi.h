@@ -23,6 +23,10 @@ enum class ModuleAbiObjectKind : uint8_t {
   kTypeArguments = 6,
 };
 
+enum class ModuleAbiPayloadSectionKind : uint16_t {
+  kAbiImports = 1,
+};
+
 // Runtime export table tags used by LoadedModule::exports. The table is a flat
 // VM Array with ModuleExportTable::kEntryLength elements per entry.
 enum class ModuleExportKind : intptr_t {
@@ -41,6 +45,56 @@ class ModuleExportTable {
  private:
   DISALLOW_ALLOCATION();
   DISALLOW_IMPLICIT_CONSTRUCTORS(ModuleExportTable);
+};
+
+// Runtime import table layout used by LoadedModule::abi_imports. The table is a
+// flat VM Array with ModuleAbiImportTable::kEntryLength elements per entry.
+class ModuleAbiImportTable {
+ public:
+  static constexpr intptr_t kKindIndex = 0;
+  static constexpr intptr_t kManifestIdIndex = 1;
+  static constexpr intptr_t kExpectedHashIndex = 2;
+  static constexpr intptr_t kResolvedObjectIndex = 3;
+  static constexpr intptr_t kEntryLength = 4;
+
+ private:
+  DISALLOW_ALLOCATION();
+  DISALLOW_IMPLICIT_CONSTRUCTORS(ModuleAbiImportTable);
+};
+
+// Runtime ABI manifest object-table layout. Slot 0 keeps the original manifest
+// text for diagnostics/tooling. The remaining slots are host-owned object
+// arrays indexed by manifest id for ModuleAbiImportRecord resolution.
+class ModuleAbiManifestTable {
+ public:
+  static constexpr intptr_t kRawJsonIndex = 0;
+  static constexpr intptr_t kLibraryIndex =
+      1 + static_cast<intptr_t>(ModuleAbiObjectKind::kLibrary);
+  static constexpr intptr_t kClassIndex =
+      1 + static_cast<intptr_t>(ModuleAbiObjectKind::kClass);
+  static constexpr intptr_t kFieldIndex =
+      1 + static_cast<intptr_t>(ModuleAbiObjectKind::kField);
+  static constexpr intptr_t kFunctionIndex =
+      1 + static_cast<intptr_t>(ModuleAbiObjectKind::kFunction);
+  static constexpr intptr_t kSelectorIndex =
+      1 + static_cast<intptr_t>(ModuleAbiObjectKind::kSelector);
+  static constexpr intptr_t kTypeIndex =
+      1 + static_cast<intptr_t>(ModuleAbiObjectKind::kType);
+  static constexpr intptr_t kTypeArgumentsIndex =
+      1 + static_cast<intptr_t>(ModuleAbiObjectKind::kTypeArguments);
+  static constexpr intptr_t kLength =
+      kTypeArgumentsIndex + static_cast<intptr_t>(1);
+
+  static constexpr intptr_t ObjectKindToTableIndex(uint16_t object_kind) {
+    return object_kind <=
+                   static_cast<uint16_t>(ModuleAbiObjectKind::kTypeArguments)
+               ? static_cast<intptr_t>(object_kind) + 1
+               : -1;
+  }
+
+ private:
+  DISALLOW_ALLOCATION();
+  DISALLOW_IMPLICIT_CONSTRUCTORS(ModuleAbiManifestTable);
 };
 
 // Fixed-size prefix for the kDartModuleAbiData symbol.
@@ -83,11 +137,50 @@ struct ModuleAbiRuntimeIds {
   uint32_t reserved = 0;
 };
 
+// Header for optional payload sections following ModuleAbiRuntimeIds.
+//
+// Payload-section layout:
+//   0..1   ModuleAbiPayloadSectionKind
+//   2..3   reserved flags, currently zero
+//   4..7   fixed entry size in bytes
+//   8..11  entry count
+//   12..15 payload size in bytes
+//   16..   payload bytes
+struct ModuleAbiPayloadSection {
+  uint16_t kind = 0;
+  uint16_t flags = 0;
+  uint32_t entry_size = 0;
+  uint32_t entry_count = 0;
+  uint32_t payload_size = 0;
+  const uint8_t* payload = nullptr;
+
+  bool IsNull() const { return kind == 0; }
+};
+
+// Fixed-size ABI import record. The manifest id is interpreted inside the
+// table named by |object_kind| in the host ABI manifest.
+//
+// Import-record layout:
+//   0..1   ModuleAbiObjectKind
+//   2..3   reserved flags, currently zero
+//   4..7   manifest table id
+//   8..15  expected per-object ABI hash, or zero when not available yet
+struct ModuleAbiImportRecord {
+  uint16_t object_kind = 0;
+  uint16_t flags = 0;
+  uint32_t manifest_id = 0;
+  uint64_t expected_hash = 0;
+};
+
 class ModuleAbi {
  public:
   static constexpr intptr_t kHeaderSize = 48;
   static constexpr intptr_t kRuntimeIdsSize = 16;
-  static constexpr uint16_t kCurrentFormatVersion = 2;
+  static constexpr intptr_t kPayloadSectionHeaderSize = 16;
+  static constexpr intptr_t kImportRecordSize = 16;
+  static constexpr intptr_t kRuntimeIdsAndEmptyImportSectionSize =
+      kRuntimeIdsSize + kPayloadSectionHeaderSize;
+  static constexpr uint16_t kCurrentFormatVersion = 3;
 
   enum HeaderFlag : uint16_t {
     kCompressedPointers = 1 << 0,
@@ -131,12 +224,25 @@ class ModuleAbi {
   static const char* ReadRuntimeIds(const uint8_t* data,
                                     const ModuleAbiHeader& header,
                                     ModuleAbiRuntimeIds* out);
+  static const char* FindPayloadSection(const uint8_t* data,
+                                        const ModuleAbiHeader& header,
+                                        ModuleAbiPayloadSectionKind kind,
+                                        ModuleAbiPayloadSection* out);
+  static const char* ReadImportRecord(const ModuleAbiPayloadSection& section,
+                                      intptr_t index,
+                                      ModuleAbiImportRecord* out);
+  static const char* ValidatePayload(const uint8_t* data,
+                                     const ModuleAbiHeader& header);
   static void WriteHeader(uint8_t* data,
                           uint64_t manifest_hash,
                           uint32_t payload_size = 0);
   static void WriteHeaderAndRuntimeIds(uint8_t* data,
                                        uint64_t manifest_hash,
                                        const ModuleAbiRuntimeIds& runtime_ids);
+  static void WriteHeaderRuntimeIdsAndEmptyImportSection(
+      uint8_t* data,
+      uint64_t manifest_hash,
+      const ModuleAbiRuntimeIds& runtime_ids);
   static const char* ValidateCompatibility(const ModuleAbiHeader& header,
                                            uint64_t host_manifest_hash,
                                            IsolateGroup* isolate_group);

@@ -73,9 +73,8 @@ uint64_t CurrentSdkHash() {
 }
 
 uint64_t CurrentCompilerFlagsHash(IsolateGroup* isolate_group) {
-  char* features =
-      Dart::FeaturesString(isolate_group, /*is_vm_isolate=*/false,
-                           Snapshot::kFullAOTModule);
+  char* features = Dart::FeaturesString(isolate_group, /*is_vm_isolate=*/false,
+                                        Snapshot::kFullAOTModule);
   ASSERT(features != nullptr);
   const uint64_t hash = HashCString(features);
   free(features);
@@ -153,6 +152,76 @@ void WriteHeaderFields(uint8_t* data, const ModuleAbiHeader& header) {
   WriteUint32LE(data + 44, header.reserved);
 }
 
+bool IsKnownObjectKind(uint16_t kind) {
+  return kind <= static_cast<uint16_t>(ModuleAbiObjectKind::kTypeArguments);
+}
+
+bool CheckedPayloadOffset(const ModuleAbiHeader& header,
+                          intptr_t* offset,
+                          intptr_t* remaining) {
+  if (header.payload_size < ModuleAbi::kRuntimeIdsSize) {
+    *offset = 0;
+    *remaining = 0;
+    return header.payload_size == 0;
+  }
+  *offset =
+      static_cast<intptr_t>(header.header_size) + ModuleAbi::kRuntimeIdsSize;
+  *remaining =
+      static_cast<intptr_t>(header.payload_size) - ModuleAbi::kRuntimeIdsSize;
+  return true;
+}
+
+const char* ReadPayloadSectionAt(const uint8_t* data,
+                                 intptr_t remaining,
+                                 ModuleAbiPayloadSection* out) {
+  ASSERT(out != nullptr);
+  if (remaining < ModuleAbi::kPayloadSectionHeaderSize) {
+    return "invalid module ABI payload section header";
+  }
+
+  ModuleAbiPayloadSection section;
+  section.kind = ReadUint16LE(data);
+  section.flags = ReadUint16LE(data + 2);
+  section.entry_size = ReadUint32LE(data + 4);
+  section.entry_count = ReadUint32LE(data + 8);
+  section.payload_size = ReadUint32LE(data + 12);
+  section.payload = data + ModuleAbi::kPayloadSectionHeaderSize;
+
+  if (section.flags != 0) {
+    return "invalid module ABI payload section flags";
+  }
+  if (section.payload_size >
+      static_cast<uint32_t>(remaining - ModuleAbi::kPayloadSectionHeaderSize)) {
+    return "invalid module ABI payload section size";
+  }
+  if (section.entry_count != 0 && section.entry_size == 0) {
+    return "invalid module ABI payload section entry size";
+  }
+  if (section.entry_size != 0 &&
+      section.entry_count >
+          (static_cast<uint32_t>(kMaxUint32) / section.entry_size)) {
+    return "module ABI payload section is too large";
+  }
+  if (section.entry_size * section.entry_count != section.payload_size) {
+    return "invalid module ABI payload section table size";
+  }
+
+  *out = section;
+  return nullptr;
+}
+
+void WritePayloadSectionHeader(uint8_t* data,
+                               ModuleAbiPayloadSectionKind kind,
+                               uint32_t entry_size,
+                               uint32_t entry_count,
+                               uint32_t payload_size) {
+  WriteUint16LE(data, static_cast<uint16_t>(kind));
+  WriteUint16LE(data + 2, 0);
+  WriteUint32LE(data + 4, entry_size);
+  WriteUint32LE(data + 8, entry_count);
+  WriteUint32LE(data + 12, payload_size);
+}
+
 }  // namespace
 
 const char* ModuleAbi::ReadHeader(const uint8_t* data, ModuleAbiHeader* out) {
@@ -222,6 +291,117 @@ const char* ModuleAbi::ReadRuntimeIds(const uint8_t* data,
   return nullptr;
 }
 
+const char* ModuleAbi::FindPayloadSection(const uint8_t* data,
+                                          const ModuleAbiHeader& header,
+                                          ModuleAbiPayloadSectionKind kind,
+                                          ModuleAbiPayloadSection* out) {
+  ASSERT(out != nullptr);
+  *out = ModuleAbiPayloadSection();
+  if (header.payload_size == 0) return nullptr;
+  if (data == nullptr) {
+    return "missing module ABI data";
+  }
+
+  intptr_t offset = 0;
+  intptr_t remaining = 0;
+  if (!CheckedPayloadOffset(header, &offset, &remaining)) {
+    return "invalid module ABI runtime-id payload size";
+  }
+  while (remaining > 0) {
+    ModuleAbiPayloadSection section;
+    const char* error =
+        ReadPayloadSectionAt(data + offset, remaining, &section);
+    if (error != nullptr) return error;
+    if (section.kind == static_cast<uint16_t>(kind)) {
+      *out = section;
+      return nullptr;
+    }
+    const intptr_t section_size =
+        kPayloadSectionHeaderSize + section.payload_size;
+    offset += section_size;
+    remaining -= section_size;
+  }
+
+  return nullptr;
+}
+
+const char* ModuleAbi::ReadImportRecord(const ModuleAbiPayloadSection& section,
+                                        intptr_t index,
+                                        ModuleAbiImportRecord* out) {
+  ASSERT(out != nullptr);
+  if (section.IsNull()) {
+    return "missing module ABI import section";
+  }
+  if (section.kind !=
+      static_cast<uint16_t>(ModuleAbiPayloadSectionKind::kAbiImports)) {
+    return "invalid module ABI import section kind";
+  }
+  if (section.entry_size != kImportRecordSize) {
+    return "invalid module ABI import record size";
+  }
+  if (index < 0 || static_cast<uint64_t>(index) >=
+                       static_cast<uint64_t>(section.entry_count)) {
+    return "module ABI import record index is out of range";
+  }
+
+  const uint8_t* record = section.payload + (index * kImportRecordSize);
+  ModuleAbiImportRecord decoded;
+  decoded.object_kind = ReadUint16LE(record);
+  decoded.flags = ReadUint16LE(record + 2);
+  decoded.manifest_id = ReadUint32LE(record + 4);
+  decoded.expected_hash = ReadUint64LE(record + 8);
+  if (!IsKnownObjectKind(decoded.object_kind)) {
+    return "invalid module ABI import object kind";
+  }
+  if (decoded.flags != 0) {
+    return "invalid module ABI import record flags";
+  }
+
+  *out = decoded;
+  return nullptr;
+}
+
+const char* ModuleAbi::ValidatePayload(const uint8_t* data,
+                                       const ModuleAbiHeader& header) {
+  if (header.payload_size == 0) return nullptr;
+  if (data == nullptr) {
+    return "missing module ABI data";
+  }
+
+  ModuleAbiRuntimeIds runtime_ids;
+  const char* error = ReadRuntimeIds(data, header, &runtime_ids);
+  if (error != nullptr) return error;
+
+  intptr_t offset = 0;
+  intptr_t remaining = 0;
+  if (!CheckedPayloadOffset(header, &offset, &remaining)) {
+    return "invalid module ABI runtime-id payload size";
+  }
+  while (remaining > 0) {
+    ModuleAbiPayloadSection section;
+    error = ReadPayloadSectionAt(data + offset, remaining, &section);
+    if (error != nullptr) return error;
+    if (section.kind ==
+        static_cast<uint16_t>(ModuleAbiPayloadSectionKind::kAbiImports)) {
+      if (section.entry_size != kImportRecordSize) {
+        return "invalid module ABI import record size";
+      }
+      for (uint32_t i = 0; i < section.entry_count; i++) {
+        ModuleAbiImportRecord record;
+        error = ReadImportRecord(section, i, &record);
+        if (error != nullptr) return error;
+      }
+    }
+
+    const intptr_t section_size =
+        kPayloadSectionHeaderSize + section.payload_size;
+    offset += section_size;
+    remaining -= section_size;
+  }
+
+  return nullptr;
+}
+
 void ModuleAbi::WriteHeader(uint8_t* data,
                             uint64_t manifest_hash,
                             uint32_t payload_size) {
@@ -250,6 +430,23 @@ void ModuleAbi::WriteHeaderAndRuntimeIds(
   WriteUint32LE(payload + 4, runtime_ids.private_selector_count);
   WriteUint32LE(payload + 8, runtime_ids.dispatch_table_entry_count);
   WriteUint32LE(payload + 12, runtime_ids.reserved);
+}
+
+void ModuleAbi::WriteHeaderRuntimeIdsAndEmptyImportSection(
+    uint8_t* data,
+    uint64_t manifest_hash,
+    const ModuleAbiRuntimeIds& runtime_ids) {
+  WriteHeader(data, manifest_hash, kRuntimeIdsAndEmptyImportSectionSize);
+  uint8_t* payload = data + kHeaderSize;
+  WriteUint32LE(payload, runtime_ids.private_class_count);
+  WriteUint32LE(payload + 4, runtime_ids.private_selector_count);
+  WriteUint32LE(payload + 8, runtime_ids.dispatch_table_entry_count);
+  WriteUint32LE(payload + 12, runtime_ids.reserved);
+  WritePayloadSectionHeader(payload + kRuntimeIdsSize,
+                            ModuleAbiPayloadSectionKind::kAbiImports,
+                            kImportRecordSize,
+                            /*entry_count=*/0,
+                            /*payload_size=*/0);
 }
 
 const char* ModuleAbi::ValidateCompatibility(const ModuleAbiHeader& header,

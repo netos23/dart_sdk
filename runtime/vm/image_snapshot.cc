@@ -1299,9 +1299,10 @@ void AssemblyImageWriter::WriteModuleAbiData(
     uint64_t manifest_hash,
     const ModuleAbiRuntimeIds& runtime_ids) {
   static constexpr intptr_t kAbiDataSize =
-      ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsSize;
+      ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsAndEmptyImportSectionSize;
   alignas(compiler::target::kWordSize) uint8_t bytes[kAbiDataSize];
-  ModuleAbi::WriteHeaderAndRuntimeIds(bytes, manifest_hash, runtime_ids);
+  ModuleAbi::WriteHeaderRuntimeIdsAndEmptyImportSection(bytes, manifest_hash,
+                                                        runtime_ids);
 
 #if defined(DART_TARGET_OS_LINUX) || defined(DART_TARGET_OS_ANDROID) ||        \
     defined(DART_TARGET_OS_FUCHSIA) || defined(DART_TARGET_OS_WINDOWS)
@@ -1941,9 +1942,10 @@ void BlobImageWriter::WriteModuleAbiData(
     uint64_t manifest_hash,
     const ModuleAbiRuntimeIds& runtime_ids) {
   static constexpr intptr_t kAbiDataSize =
-      ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsSize;
+      ModuleAbi::kHeaderSize + ModuleAbi::kRuntimeIdsAndEmptyImportSectionSize;
   uint8_t* bytes = zone_->Alloc<uint8_t>(kAbiDataSize);
-  ModuleAbi::WriteHeaderAndRuntimeIds(bytes, manifest_hash, runtime_ids);
+  ModuleAbi::WriteHeaderRuntimeIdsAndEmptyImportSection(bytes, manifest_hash,
+                                                        runtime_ids);
   const intptr_t label = next_label_++;
   if (so_ != nullptr) {
     so_->AddROData(kModuleAbiDataAsmSymbol, label, bytes, kAbiDataSize,

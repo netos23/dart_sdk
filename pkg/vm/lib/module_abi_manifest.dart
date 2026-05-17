@@ -10,8 +10,9 @@ import 'package:crypto/crypto.dart';
 /// Deterministic host/module ABI manifest envelope for `dart:module`.
 ///
 /// The schema is intentionally conservative. It records semantic ABI entries
-/// that the current front-end dynamic-interface annotator can describe, while
-/// leaving layout, signature, type, and selector hashes for later stages.
+/// that the current front-end dynamic-interface annotator can describe, and it
+/// reserves deterministic sections for the layout, signature, type, selector,
+/// and export records that later precompiler passes will populate.
 final class DartModuleAbiManifest {
   static const String kind = 'dart-module-abi';
   static const int formatVersion = 1;
@@ -22,14 +23,7 @@ final class DartModuleAbiManifest {
   DartModuleAbiManifest._(this.semantic, this.hash);
 
   factory DartModuleAbiManifest.empty() {
-    return DartModuleAbiManifest.fromSemantic(<String, Object?>{
-      'classes': <Object?>[],
-      'exports': <Object?>[],
-      'fields': <Object?>[],
-      'libraries': <Object?>[],
-      'members': <Object?>[],
-      'selectors': <Object?>[],
-    });
+    return DartModuleAbiManifest.fromSemantic(const <String, Object?>{});
   }
 
   factory DartModuleAbiManifest.fromDetailedDynamicInterfaceJson(
@@ -143,7 +137,7 @@ final class DartModuleAbiManifest {
   }
 
   factory DartModuleAbiManifest.fromSemantic(Map<String, Object?> semantic) {
-    final normalized = _normalizeMap(semantic);
+    final normalized = _canonicalizeSemantic(_normalizeMap(semantic));
     return DartModuleAbiManifest._(
       normalized,
       _hashSemanticPayload(normalized),
@@ -198,6 +192,47 @@ final class DartModuleAbiManifest {
   }
 
   String get hashHex => '0x${hash.toRadixString(16).padLeft(16, '0')}';
+}
+
+const List<String> _semanticSectionNames = <String>[
+  'abiImports',
+  'classLayouts',
+  'classes',
+  'exports',
+  'fieldLayouts',
+  'fields',
+  'hostExports',
+  'implementationSlots',
+  'libraries',
+  'memberSignatures',
+  'members',
+  'moduleExports',
+  'moduleImports',
+  'selectorMetadata',
+  'selectors',
+  'typeArguments',
+  'types',
+];
+
+Map<String, Object?> _canonicalizeSemantic(Map<String, Object?> semantic) {
+  final result = <String, Object?>{
+    for (final sectionName in _semanticSectionNames)
+      sectionName: semantic[sectionName] ?? <Object?>[],
+  };
+  for (final entry in semantic.entries) {
+    if (!_semanticSectionNames.contains(entry.key)) {
+      result[entry.key] = entry.value;
+    }
+  }
+  for (final sectionName in _semanticSectionNames) {
+    final section = result[sectionName];
+    if (section is! List) {
+      throw FormatException(
+        'module ABI manifest semantic section $sectionName must be a list',
+      );
+    }
+  }
+  return _normalizeMap(result);
 }
 
 int _hashSemanticPayload(Map<String, Object?> semantic) {

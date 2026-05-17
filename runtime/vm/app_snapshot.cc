@@ -7357,8 +7357,7 @@ class ProgramDeserializationRoots : public DeserializationRoots {
   ObjectStore* object_store_;
 };
 
-static ArrayPtr BuildModuleExportTable(Zone* zone,
-                                       ObjectStore* object_store) {
+static ArrayPtr BuildModuleExportTable(Zone* zone, ObjectStore* object_store) {
   const GrowableObjectArray& libs =
       GrowableObjectArray::Handle(zone, object_store->libraries());
   if (libs.IsNull()) return Object::empty_array().ptr();
@@ -7442,6 +7441,116 @@ static void InitializeModuleLinkTables(LoadedModule* loaded_module) {
   loaded_module->class_id_bindings = empty;
 }
 
+static const char* ResolveModuleAbiImport(IsolateGroup* isolate_group,
+                                          Zone* zone,
+                                          const ModuleAbiImportRecord& record,
+                                          Object* out) {
+  ASSERT(isolate_group != nullptr);
+  ASSERT(out != nullptr);
+  const Array& manifest =
+      Array::Handle(zone, isolate_group->module_abi_manifest());
+  if (manifest.IsNull()) {
+    return "module ABI import records require a host ABI manifest";
+  }
+
+  const intptr_t table_index =
+      ModuleAbiManifestTable::ObjectKindToTableIndex(record.object_kind);
+  if (table_index < 0 || table_index >= manifest.Length()) {
+    return "host ABI manifest object table is missing";
+  }
+
+  Object& table_object = Object::Handle(zone, manifest.At(table_index));
+  if (!table_object.IsArray()) {
+    return "host ABI manifest object table has invalid shape";
+  }
+  const Array& table = Array::Cast(table_object);
+  if (static_cast<uint64_t>(record.manifest_id) >
+      static_cast<uint64_t>(kIntptrMax)) {
+    return "module ABI import manifest id is out of range";
+  }
+  const intptr_t manifest_id = static_cast<intptr_t>(record.manifest_id);
+  if (manifest_id >= table.Length()) {
+    return "module ABI import manifest id is not in the host object table";
+  }
+
+  *out = table.At(manifest_id);
+  if (out->IsNull()) {
+    return "module ABI import resolved to null host object";
+  }
+  return nullptr;
+}
+
+static ArrayPtr BuildModuleAbiImportTable(IsolateGroup* isolate_group,
+                                          Zone* zone,
+                                          LoadedModule* loaded_module,
+                                          const char** out_error) {
+  ASSERT(loaded_module != nullptr);
+  ASSERT(loaded_module->abi_data != nullptr);
+  ASSERT(out_error != nullptr);
+  *out_error = nullptr;
+
+  ModuleAbiPayloadSection section;
+  const char* error = ModuleAbi::FindPayloadSection(
+      loaded_module->abi_data, loaded_module->abi_header,
+      ModuleAbiPayloadSectionKind::kAbiImports, &section);
+  if (error != nullptr) {
+    *out_error = error;
+    return Array::null();
+  }
+  if (section.IsNull() || section.entry_count == 0) {
+    return Object::empty_array().ptr();
+  }
+  if (section.entry_count >
+      static_cast<uint32_t>(kIntptrMax / ModuleAbiImportTable::kEntryLength)) {
+    *out_error = "too many module ABI import records";
+    return Array::null();
+  }
+
+  const intptr_t import_count = section.entry_count;
+  const Array& imports = Array::Handle(
+      zone, Array::New(import_count * ModuleAbiImportTable::kEntryLength,
+                       Heap::kOld));
+  Smi& kind = Smi::Handle(zone);
+  Integer& manifest_id = Integer::Handle(zone);
+  Integer& expected_hash = Integer::Handle(zone);
+  Object& resolved_object = Object::Handle(zone);
+  for (intptr_t i = 0; i < import_count; i++) {
+    ModuleAbiImportRecord record;
+    error = ModuleAbi::ReadImportRecord(section, i, &record);
+    if (error != nullptr) {
+      *out_error = error;
+      return Array::null();
+    }
+    error =
+        ResolveModuleAbiImport(isolate_group, zone, record, &resolved_object);
+    if (error != nullptr) {
+      *out_error = error;
+      return Array::null();
+    }
+    const intptr_t entry = i * ModuleAbiImportTable::kEntryLength;
+    kind = Smi::New(record.object_kind);
+    manifest_id = Integer::NewFromUint64(record.manifest_id, Heap::kOld);
+    expected_hash = Integer::NewFromUint64(record.expected_hash, Heap::kOld);
+    imports.SetAt(entry + ModuleAbiImportTable::kKindIndex, kind);
+    imports.SetAt(entry + ModuleAbiImportTable::kManifestIdIndex, manifest_id);
+    imports.SetAt(entry + ModuleAbiImportTable::kExpectedHashIndex,
+                  expected_hash);
+    imports.SetAt(entry + ModuleAbiImportTable::kResolvedObjectIndex,
+                  resolved_object);
+  }
+  return imports.ptr();
+}
+
+static ArrayPtr BuildModuleExportLinkSlots(Zone* zone, const Array& exports) {
+  if (exports.IsNull() || exports.Length() == 0) {
+    return Object::empty_array().ptr();
+  }
+  ASSERT(exports.Length() % ModuleExportTable::kEntryLength == 0);
+  const intptr_t export_count =
+      exports.Length() / ModuleExportTable::kEntryLength;
+  return Array::New(export_count, Heap::kOld);
+}
+
 static ArrayPtr BuildSmiRangeBindingTable(Zone* zone,
                                           intptr_t base_id,
                                           intptr_t count) {
@@ -7460,8 +7569,7 @@ static ArrayPtr BuildSmiRangeBindingTable(Zone* zone,
   return bindings.ptr();
 }
 
-static intptr_t ModuleRuntimeIdCountToIntptr(uint32_t count,
-                                             const char* name) {
+static intptr_t ModuleRuntimeIdCountToIntptr(uint32_t count, const char* name) {
   if (static_cast<uint64_t>(count) > static_cast<uint64_t>(kIntptrMax)) {
     FATAL("Module ABI %s count is out of range", name);
   }
@@ -7471,6 +7579,7 @@ static intptr_t ModuleRuntimeIdCountToIntptr(uint32_t count,
 static void ReserveModuleClassTableSlots(IsolateGroup* isolate_group,
                                          Zone* zone,
                                          LoadedModule* loaded_module) {
+  ASSERT(isolate_group->program_lock()->IsCurrentThreadWriter());
   const intptr_t private_class_count = ModuleRuntimeIdCountToIntptr(
       loaded_module->abi_runtime_ids.private_class_count, "private class");
   loaded_module->class_count = private_class_count;
@@ -7489,6 +7598,7 @@ static void ReserveModuleClassTableSlots(IsolateGroup* isolate_group,
 static void ReserveModuleSelectorIds(IsolateGroup* isolate_group,
                                      Zone* zone,
                                      LoadedModule* loaded_module) {
+  ASSERT(isolate_group->program_lock()->IsCurrentThreadWriter());
   const intptr_t selector_count = ModuleRuntimeIdCountToIntptr(
       loaded_module->abi_runtime_ids.private_selector_count,
       "private selector");
@@ -7507,6 +7617,19 @@ static void ReserveModuleDispatchTableSlots(LoadedModule* loaded_module,
   loaded_module->dispatch_table_entry_count = module_length;
   if (module_length == 0) return;
 
+  const intptr_t private_class_count = ModuleRuntimeIdCountToIntptr(
+      loaded_module->abi_runtime_ids.private_class_count, "private class");
+  if (private_class_count > kIntptrMax - kNumPredefinedCids) {
+    FATAL("Too many module class IDs to reserve");
+  }
+  const intptr_t minimum_module_length =
+      kNumPredefinedCids + private_class_count;
+  if (module_length < minimum_module_length) {
+    FATAL(
+        "Module ABI dispatch table entry count is too small: expected at "
+        "least %" Pd ", found %" Pd,
+        minimum_module_length, module_length);
+  }
   if (cid_offset != 0 && module_length > kIntptrMax - cid_offset) {
     FATAL("Too many module dispatch table entries to reserve");
   }
@@ -7514,6 +7637,33 @@ static void ReserveModuleDispatchTableSlots(LoadedModule* loaded_module,
       cid_offset == 0 ? module_length : cid_offset + module_length;
   loaded_module->dispatch_table = new DispatchTable(reserved_length);
 }
+
+static const char* ReserveModuleRuntimeIds(IsolateGroup* isolate_group,
+                                           Zone* zone,
+                                           LoadedModule* loaded_module,
+                                           intptr_t cid_offset,
+                                           intptr_t* out_module_id) {
+  ASSERT(isolate_group->program_lock()->IsCurrentThreadWriter());
+  ASSERT(loaded_module != nullptr);
+  ASSERT(loaded_module->object_store != nullptr);
+  ASSERT(loaded_module->id == -1);
+  ASSERT(out_module_id != nullptr);
+
+  InitializeModuleLinkTables(loaded_module);
+  const char* error = nullptr;
+  loaded_module->abi_imports =
+      BuildModuleAbiImportTable(isolate_group, zone, loaded_module, &error);
+  if (error != nullptr) return error;
+  const intptr_t module_id = isolate_group->AddLoadedModule(loaded_module);
+  ReserveModuleClassTableSlots(isolate_group, zone, loaded_module);
+  ReserveModuleSelectorIds(isolate_group, zone, loaded_module);
+  ReserveModuleDispatchTableSlots(loaded_module, cid_offset);
+  *out_module_id = module_id;
+  return nullptr;
+}
+
+static void AddModuleAbiImportsAsBaseObjects(Deserializer* d,
+                                             LoadedModule* loaded_module);
 
 // DeserializationRoots for kFullAOTModule snapshots.
 // Reads into a module-specific ObjectStore and extends the IsolateGroup's
@@ -7533,6 +7683,7 @@ class ModuleDeserializationRoots : public DeserializationRoots {
     for (intptr_t i = kFirstReference; i < base_objects.Length(); i++) {
       d->AddBaseObject(base_objects.At(i));
     }
+    AddModuleAbiImportsAsBaseObjects(d, loaded_module_);
   }
 
   void ReadRoots(Deserializer* d) override {
@@ -7609,12 +7760,14 @@ class ModuleDeserializationRoots : public DeserializationRoots {
       ASSERT(class_index == class_count);
     }
 
-
     // Refresh class sizes for any new module classes now in the shared table.
     d->isolate_group()->class_table()->CopySizesFromClassObjects();
     d->heap()->old_space()->EvaluateAfterLoading();
 
     loaded_module_->exports = BuildModuleExportTable(d->zone(), object_store_);
+    const Array& exports = Array::Handle(d->zone(), loaded_module_->exports);
+    loaded_module_->export_link_slots =
+        BuildModuleExportLinkSlots(d->zone(), exports);
   }
 
  private:
@@ -7623,6 +7776,27 @@ class ModuleDeserializationRoots : public DeserializationRoots {
 
   DISALLOW_COPY_AND_ASSIGN(ModuleDeserializationRoots);
 };
+
+static void AddModuleAbiImportsAsBaseObjects(Deserializer* d,
+                                             LoadedModule* loaded_module) {
+  ASSERT(loaded_module != nullptr);
+  const Array& imports = Array::Handle(d->zone(), loaded_module->abi_imports);
+  if (imports.IsNull() || imports.Length() == 0) return;
+  if ((imports.Length() % ModuleAbiImportTable::kEntryLength) != 0) {
+    FATAL("Invalid module ABI import table length");
+  }
+
+  Object& object = Object::Handle(d->zone());
+  for (intptr_t i = 0; i < imports.Length();
+       i += ModuleAbiImportTable::kEntryLength) {
+    object = imports.At(i + ModuleAbiImportTable::kResolvedObjectIndex);
+    if (object.IsNull()) {
+      FATAL("Unresolved module ABI import at index %" Pd,
+            i / ModuleAbiImportTable::kEntryLength);
+    }
+    d->AddBaseObject(object.ptr());
+  }
+}
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
 class UnitSerializationRoots : public SerializationRoots {
@@ -10578,12 +10752,14 @@ ApiErrorPtr FullSnapshotReader::ReadModuleSnapshot(LoadedModule* loaded_module,
   loaded_module->object_store = module_object_store;
   loaded_module->base_class_id = cids_before;
   loaded_module->class_count = 0;
-  InitializeModuleLinkTables(loaded_module);
-  *out_module_id = isolate_group()->AddLoadedModule(loaded_module);
-  ReserveModuleClassTableSlots(isolate_group(), thread_->zone(),
-                               loaded_module);
-  ReserveModuleSelectorIds(isolate_group(), thread_->zone(), loaded_module);
-  ReserveModuleDispatchTableSlots(loaded_module, deserializer.cid_offset());
+  const char* module_abi_error =
+      ReserveModuleRuntimeIds(isolate_group(), thread_->zone(), loaded_module,
+                              deserializer.cid_offset(), out_module_id);
+  if (module_abi_error != nullptr) {
+    const String& msg = String::Handle(
+        thread_->zone(), String::New(module_abi_error, Heap::kOld));
+    return ApiError::New(msg, Heap::kOld);
+  }
   deserializer.set_loaded_module(loaded_module);
 
   ModuleDeserializationRoots roots(module_object_store, loaded_module);

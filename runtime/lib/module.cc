@@ -208,6 +208,11 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
     Utils::UnloadDynamicLibrary(dl_handle);
     ThrowModuleSnapshotError(abi_error);
   }
+  abi_error = ModuleAbi::ValidatePayload(module_abi_data, module_abi_header);
+  if (abi_error != nullptr) {
+    Utils::UnloadDynamicLibrary(dl_handle);
+    ThrowModuleSnapshotError(abi_error);
+  }
 
   const uint64_t host_abi_hash =
       thread->isolate_group()->module_abi_manifest_hash();
@@ -234,7 +239,18 @@ DEFINE_NATIVE_ENTRY(Module_load, 0, 2) {
     FullSnapshotReader reader(snapshot, isolate_snapshot_instructions, thread);
     ApiErrorPtr api_error = reader.ReadModuleSnapshot(loaded, &module_id);
     if (api_error != ApiError::null()) {
+      if (module_id >= 0) {
+        LoadedModule* removed = nullptr;
+        {
+          SafepointWriteRwLocker ml(thread,
+                                    thread->isolate_group()->program_lock());
+          removed = thread->isolate_group()->RemoveLoadedModule(module_id);
+        }
+        ASSERT(removed == nullptr || removed == loaded);
+      }
+      loaded->dl_handle = nullptr;
       delete loaded;
+      Utils::UnloadDynamicLibrary(dl_handle);
       const auto& err_obj = ApiError::Handle(zone, api_error);
       const String& msg = String::Handle(zone, err_obj.message());
       Exceptions::ThrowArgumentError(msg);

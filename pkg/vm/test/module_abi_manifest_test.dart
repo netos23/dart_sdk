@@ -39,6 +39,33 @@ void main() {
     expect(right.toJsonString(), left.toJsonString());
   });
 
+  test('semantic schema reserves ABI validation sections', () {
+    final manifest = DartModuleAbiManifest.empty();
+
+    expect(
+      manifest.semantic.keys,
+      containsAll(<String>[
+        'classLayouts',
+        'hostExports',
+        'fieldLayouts',
+        'implementationSlots',
+        'memberSignatures',
+        'moduleExports',
+        'moduleImports',
+        'selectorMetadata',
+        'typeArguments',
+        'types',
+      ]),
+    );
+    expect(manifest.semantic['classLayouts'], isEmpty);
+    expect(
+      () => DartModuleAbiManifest.fromSemantic(<String, Object?>{
+        'classLayouts': 'not-a-list',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
   test('stored hash is validated', () {
     final json = DartModuleAbiManifest.empty().toJson();
     json['hash'] = '0x0000000000000001';

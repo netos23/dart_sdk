@@ -492,6 +492,10 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   // Module management (dart:module). Callers must hold program_lock().
   // Transfers ownership of |module| and reserves its 0-based module id.
   intptr_t AddLoadedModule(LoadedModule* module);
+  // Removes a module registration that has not been exposed to Dart code.
+  // Returns the removed module, or nullptr if |index| is out of range.
+  // Ownership is returned to the caller.
+  LoadedModule* RemoveLoadedModule(intptr_t index);
   // Returns nullptr if |index| is out of range.
   LoadedModule* GetLoadedModule(intptr_t index) const;
   intptr_t loaded_module_count() const;
@@ -511,6 +515,8 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   }
   void SetModuleAbiManifest(const Array& manifest, uint64_t manifest_hash);
   intptr_t ReserveModuleSelectorIds(intptr_t selector_count);
+  void ReleaseModuleSelectorIds(intptr_t base_selector_id,
+                                intptr_t selector_count);
 
   ClassTableAllocator* class_table_allocator() {
     return &class_table_allocator_;
@@ -676,6 +682,7 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
   }
 
   SafepointRwLock* program_lock() { return program_lock_.get(); }
+  SafepointRwLock* program_lock() const { return program_lock_.get(); }
 
   static inline IsolateGroup* Current() {
     Thread* thread = Thread::Current();

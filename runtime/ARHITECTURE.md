@@ -62,19 +62,24 @@ Implemented today:
 - Runtime loading through `lib/module.cc`.
 - `Snapshot::kFullAOTModule`.
 - A VM ABI sidecar in `vm/module_abi.{h,cc}`:
-  - fixed `"DMAB"` header, currently format version 2;
+  - fixed `"DMAB"` header, currently format version 3;
   - SDK hash, compiler-flags hash, target architecture, target OS, mode flags;
   - optional manifest hash;
   - runtime-id payload for private class count, private selector count, and
     serialized module dispatch table entry count.
+  - optional typed payload sections after the runtime-id payload. The first
+    defined section is an ABI import table made of fixed-size records:
+    object kind, manifest id, and expected per-object hash.
 - `ImageWriter::WriteModuleAbiData` emits the ABI sidecar as
-  `kDartModuleAbiData` for module AOT images.
+  `kDartModuleAbiData` for module AOT images, including an empty ABI import
+  section until the module serializer starts emitting real import records.
 - `ProgramSerializationRoots` serializes the host/module ABI manifest payload,
   manifest hash, and dispatch selector count. `ProgramDeserializationRoots`
   restores the payload/hash and seeds the next module-private selector id.
-- The embedded host ABI manifest payload is currently opaque to the VM: it is
-  retained as a JSON string inside the isolate-group manifest array for later
-  semantic import/linking work.
+- The embedded host ABI manifest keeps the original JSON text and reserves
+  per-kind runtime object tables for host-owned ABI libraries, classes, fields,
+  functions, selectors, types, and type arguments. Those object tables are
+  currently empty until the precompiler starts populating semantic ABI entries.
 - `Precompiler::FinalizeDispatchTable` records the dispatch table generator's
   selector count in the `IsolateGroup`.
 - Module deserialization through
@@ -99,10 +104,18 @@ Implemented today:
   - preallocates the expected merged dispatch table size when declared;
   - validates serialized class, selector, and dispatch table counts where
     runtime-id data is available.
+- The loader validates the ABI payload section structure before deserialization.
+  `LoadedModule::abi_imports` has a flat runtime layout for sidecar import
+  records: kind, manifest id, expected hash, and resolved host object.
+  `ReadModuleSnapshot` resolves import records against the host ABI manifest
+  object tables before publishing the module. `ModuleDeserializationRoots` then
+  adds those resolved imports as module base objects. Non-empty import sections
+  still fail until the host precompiler populates the manifest object tables.
 - `ModuleDeserializationRoots` reads into a module-specific object store, reads
   module static field tables, installs the module dispatch table contribution,
   records deserialized module classes, and builds a flat export table for
-  surviving top-level static fields, regular functions, and getters.
+  surviving top-level static fields, regular functions, and getters. It also
+  prepares a parallel export link-slot array for future generated host stubs.
 - `Deserializer::ReadModuleDispatchTable` still merges by the serialized table
   layout plus CID offset. It can reuse the preallocated table from
   `LoadedModule`, but it does not yet merge by semantic selector id/key.
@@ -119,12 +132,14 @@ Implemented today:
 - `Module.lookupFunction<T>` returns an implicit closure for a retained
   top-level regular module function. It is an explicit lookup path, not a
   generated direct-call/link-slot path.
-- `vm/module_abi_test.cc` covers ABI header/runtime-id encoding, compatibility
-  checks, and export-table layout constants.
+- `vm/module_abi_test.cc` covers ABI header/runtime-id/import-section encoding,
+  compatibility checks, and import/export-table layout constants.
 - `pkg/vm/lib/module_abi_manifest.dart` provides the Stage 1 deterministic
   JSON manifest envelope and 63-bit hash used by tooling. It can also convert
   the front end's detailed dynamic-interface dump into semantic library, class,
-  and member ABI entries with callable, extendable, and can-be-overridden flags.
+  and member ABI entries with callable, extendable, and can-be-overridden flags,
+  and reserves canonical empty sections for layout, signature, type, selector,
+  and export metadata that later passes will populate.
 - `dart compile` now has Stage 1 manifest plumbing:
   - host AOT outputs can use `--emit-module-abi=<path>`;
   - module AOT outputs can use `--module-abi=<path>`;
@@ -198,7 +213,8 @@ Important current code anchors:
 Still missing for typed direct calls:
 
 - Layout, signature, type, selector, and export metadata in the ABI manifest.
-- ABI import reference encoding in the snapshot. Modules still deserialize
+- ABI import reference emission in the snapshot. The ABI sidecar now has a
+  concrete import-record format and loader table, but modules still deserialize
   their own declarations using VM-isolate base objects and shifted private CIDs.
 - Shared ABI `Library`, `Class`, `Function`, `Field`, `Type`, and
   `TypeArguments` identity.
@@ -555,7 +571,8 @@ Currently implemented subset:
 
 - `kDartModuleAbiData` is emitted beside module snapshot data/instructions.
 - The ABI sidecar contains header compatibility data, an optional manifest hash,
-  and fixed runtime-id counts.
+  fixed runtime-id counts, and optional typed payload sections. Module AOT
+  images currently emit an empty ABI import section.
 - The normal program roots also serialize a manifest hash and selector count.
 - Tooling can produce and consume a deterministic JSON manifest envelope. The
   current semantic payload can include dynamic-interface-derived libraries,
@@ -563,8 +580,11 @@ Currently implemented subset:
   selector, or export records.
 - Module export data is built after deserialization from surviving top-level
   fields/functions/getters and stored in `LoadedModule::exports`.
-- There is no ABI import table, relocation table, semantic selector table, or
-  serialized signature/layout manifest yet.
+- There is a loader-visible ABI import record table in the sidecar, but the
+  module serializer does not yet emit non-empty records and the host manifest
+  object tables are not populated from precompiler metadata. There is no
+  relocation table, semantic selector table, or serialized signature/layout
+  manifest yet.
 
 ### ABI Import Table
 
@@ -584,6 +604,12 @@ expected_hash
 
 During deserialization, references to ABI imports are resolved to existing host
 objects instead of allocating new objects.
+
+Current status: the binary record format, payload validation, `LoadedModule`
+table, host-manifest object-table lookup, and deserializer base-object hook
+exist. Non-empty import records are resolved before module publication, but
+they still fail until the serializer emits the ABI import set and the host
+precompiler fills the manifest object tables.
 
 ### Module Export Table
 
@@ -657,6 +683,16 @@ Under `program_lock` write:
    selectors/classes.
 4. Prepare import/export/link tables.
 
+Current status: implemented in `FullSnapshotReader::ReadModuleSnapshot` through
+the Phase 2 `ReserveModuleRuntimeIds` path. The loader initializes the
+module-specific object store, resets ABI import/export/link tables, registers
+the `LoadedModule`, reserves the module-private CID and selector ranges, builds
+CID/selector binding arrays, and preallocates the merged dispatch table capacity
+using the ABI runtime-id payload. If a non-fatal load error occurs after module
+registration, `Module_load` unregisters the `LoadedModule` before returning the
+error, releases the most recent private selector reservation when applicable,
+and unloads the dynamic library because the module was never published.
+
 ### Phase 3: Deserialize With ABI Imports
 
 `ModuleDeserializationRoots` should become ABI-aware:
@@ -667,6 +703,12 @@ Under `program_lock` write:
 
 This replaces the current "use VM isolate base objects plus shifted CIDs" model
 for shared ABI declarations.
+
+Current status: partially scaffolded. ABI import records can be read from the
+module ABI sidecar, and resolved imports can be appended to the module
+deserializer's base-object table. Host-object resolution from manifest id now
+has a runtime object-table path, but the tables are empty until precompiler
+manifest population is implemented.
 
 ### Phase 4: Apply Relocations
 
@@ -1564,8 +1606,14 @@ Current progress relative to these stages:
   scaffolding, load-time compatibility checks, deterministic manifest envelope,
   host `--emit-module-abi`, module `--module-abi` plumbing, host snapshot
   manifest payload embedding, and semantic manifest entries derived from the
-  detailed dynamic-interface dump. The manifest still lacks layout/signature/type
-  records and selector metadata.
+  detailed dynamic-interface dump. The manifest has canonical sections for
+  ABI imports, host/module exports, implementation slots,
+  layout/signature/type records, and selector metadata, but those sections are
+  not populated by the precompiler yet.
+- Stage 2 has ABI import record scaffolding in the module sidecar, host-manifest
+  object-table slots, and a deserializer base-object hook, but not serializer
+  emission of non-empty import records or precompiler population of the host
+  object tables.
 - Stage 3 has early selector-count plumbing and module-private selector id
   reservation, but not stable selector keys, manifest offsets, or merge-by-key.
 - Stage 5 has the explicit `Module.lookupFunction<T>` closure path and a flat

@@ -501,6 +501,7 @@ void LoadedModule::VisitObjectPointers(ObjectPointerVisitor* visitor) {
 
 intptr_t IsolateGroup::AddLoadedModule(LoadedModule* module) {
   // Caller must hold program_lock() write.
+  ASSERT(program_lock()->IsCurrentThreadWriter());
   ASSERT(module != nullptr);
   ASSERT(module->id == -1);
   module->id = loaded_modules_.length();
@@ -508,14 +509,36 @@ intptr_t IsolateGroup::AddLoadedModule(LoadedModule* module) {
   return module->id;
 }
 
+LoadedModule* IsolateGroup::RemoveLoadedModule(intptr_t index) {
+  // Caller must hold program_lock() write.
+  ASSERT(program_lock()->IsCurrentThreadWriter());
+  if (index < 0 || index >= loaded_modules_.length()) return nullptr;
+
+  LoadedModule* module = loaded_modules_[index];
+  if (module == nullptr) return nullptr;
+  ASSERT(module->id == index);
+  ReleaseModuleSelectorIds(module->base_selector_id, module->selector_count);
+  module->id = -1;
+  loaded_modules_[index] = nullptr;
+
+  while (!loaded_modules_.is_empty() && loaded_modules_.Last() == nullptr) {
+    loaded_modules_.RemoveLast();
+  }
+  return module;
+}
+
 LoadedModule* IsolateGroup::GetLoadedModule(intptr_t index) const {
   // Caller must hold at least program_lock() read.
+  DEBUG_ASSERT(program_lock()->IsCurrentThreadReader() ||
+               program_lock()->IsCurrentThreadWriter());
   if (index < 0 || index >= loaded_modules_.length()) return nullptr;
   return loaded_modules_[index];
 }
 
 intptr_t IsolateGroup::loaded_module_count() const {
   // Caller must hold at least program_lock() read.
+  DEBUG_ASSERT(program_lock()->IsCurrentThreadReader() ||
+               program_lock()->IsCurrentThreadWriter());
   return loaded_modules_.length();
 }
 
@@ -527,6 +550,7 @@ void IsolateGroup::SetModuleAbiManifest(const Array& manifest,
 
 intptr_t IsolateGroup::ReserveModuleSelectorIds(intptr_t selector_count) {
   // Caller must hold program_lock() write.
+  ASSERT(program_lock()->IsCurrentThreadWriter());
   ASSERT(selector_count >= 0);
   if (selector_count > kIntptrMax - next_module_selector_id_) {
     FATAL("Too many module selector IDs to reserve: %" Pd, selector_count);
@@ -534,6 +558,23 @@ intptr_t IsolateGroup::ReserveModuleSelectorIds(intptr_t selector_count) {
   const intptr_t base_selector_id = next_module_selector_id_;
   next_module_selector_id_ += selector_count;
   return base_selector_id;
+}
+
+void IsolateGroup::ReleaseModuleSelectorIds(intptr_t base_selector_id,
+                                            intptr_t selector_count) {
+  // Caller must hold program_lock() write.
+  ASSERT(program_lock()->IsCurrentThreadWriter());
+  ASSERT(selector_count >= 0);
+  if (selector_count == 0) return;
+  ASSERT(base_selector_id >= module_abi_selector_count_);
+  if (selector_count > kIntptrMax - base_selector_id) {
+    FATAL("Too many module selector IDs to release: %" Pd, selector_count);
+  }
+
+  const intptr_t end_selector_id = base_selector_id + selector_count;
+  if (end_selector_id == next_module_selector_id_) {
+    next_module_selector_id_ = base_selector_id;
+  }
 }
 
 void IsolateGroup::RegisterIsolate(Isolate* isolate) {

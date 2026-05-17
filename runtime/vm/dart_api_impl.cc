@@ -16,8 +16,8 @@
 #include "platform/unicode.h"
 #include "vm/app_snapshot.h"
 #include "vm/bytecode_reader.h"
-#include "vm/class_id.h"
 #include "vm/class_finalizer.h"
+#include "vm/class_id.h"
 #include "vm/compiler/jit/compiler.h"
 #include "vm/dart.h"
 #include "vm/dart_api_impl.h"
@@ -6666,17 +6666,14 @@ static ModuleAbiRuntimeIds CurrentModuleAbiRuntimeIds(Thread* thread) {
       isolate_group->class_table()->NumCids() - kNumPredefinedCids,
       "private class");
   runtime_ids.private_selector_count = RuntimeIdCountToUint32(
-      isolate_group->module_abi_selector_count(),
-      "private selector");
+      isolate_group->module_abi_selector_count(), "private selector");
 
   const Array& dispatch_table_entries = Array::Handle(
       thread->zone(),
       isolate_group->object_store()->dispatch_table_code_entries());
-  runtime_ids.dispatch_table_entry_count =
-      RuntimeIdCountToUint32(dispatch_table_entries.IsNull()
-                                 ? 0
-                                 : dispatch_table_entries.Length(),
-                             "dispatch table entry");
+  runtime_ids.dispatch_table_entry_count = RuntimeIdCountToUint32(
+      dispatch_table_entries.IsNull() ? 0 : dispatch_table_entries.Length(),
+      "dispatch table entry");
 
   return runtime_ids;
 }
@@ -6754,9 +6751,14 @@ static Dart_Handle SetModuleAbiManifestFromFlags(Thread* thread) {
   const String& manifest_text =
       String::Handle(thread->zone(), String::New(manifest_json, Heap::kOld));
   free(manifest_json);
-  const Array& manifest =
-      Array::Handle(thread->zone(), Array::New(1, Heap::kOld));
-  manifest.SetAt(0, manifest_text);
+  const Array& manifest = Array::Handle(
+      thread->zone(), Array::New(ModuleAbiManifestTable::kLength, Heap::kOld));
+  manifest.SetAt(ModuleAbiManifestTable::kRawJsonIndex, manifest_text);
+  const Array& empty = Object::empty_array();
+  for (intptr_t i = ModuleAbiManifestTable::kRawJsonIndex + 1;
+       i < ModuleAbiManifestTable::kLength; i++) {
+    manifest.SetAt(i, empty);
+  }
   isolate_group->SetModuleAbiManifest(
       manifest, isolate_group->module_abi_manifest_hash());
   return Api::Success();

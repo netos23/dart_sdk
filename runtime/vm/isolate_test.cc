@@ -23,6 +23,42 @@ VM_UNIT_TEST_CASE(IsolateCurrent) {
   EXPECT_EQ(static_cast<Dart_Isolate>(nullptr), Dart_CurrentIsolate());
 }
 
+VM_UNIT_TEST_CASE(LoadedModuleSelectorReservationRollback) {
+  Dart_Isolate isolate = TestCase::CreateTestIsolate();
+  EXPECT_EQ(isolate, Dart_CurrentIsolate());
+  Thread* thread = Thread::Current();
+  IsolateGroup* isolate_group = thread->isolate_group();
+
+  {
+    SafepointWriteRwLocker ml(thread, isolate_group->program_lock());
+    isolate_group->SetModuleAbiSelectorCount(10);
+
+    LoadedModule* first = new LoadedModule();
+    first->base_selector_id = isolate_group->ReserveModuleSelectorIds(3);
+    first->selector_count = 3;
+    const intptr_t first_id = isolate_group->AddLoadedModule(first);
+    EXPECT_EQ(static_cast<intptr_t>(0), first_id);
+    EXPECT_EQ(static_cast<intptr_t>(10), first->base_selector_id);
+
+    LoadedModule* removed = isolate_group->RemoveLoadedModule(first_id);
+    EXPECT_EQ(first, removed);
+    delete removed;
+
+    LoadedModule* second = new LoadedModule();
+    second->base_selector_id = isolate_group->ReserveModuleSelectorIds(2);
+    second->selector_count = 2;
+    const intptr_t second_id = isolate_group->AddLoadedModule(second);
+    EXPECT_EQ(static_cast<intptr_t>(0), second_id);
+    EXPECT_EQ(static_cast<intptr_t>(10), second->base_selector_id);
+    removed = isolate_group->RemoveLoadedModule(second_id);
+    EXPECT_EQ(second, removed);
+    delete removed;
+  }
+
+  Dart_ShutdownIsolate();
+  EXPECT_EQ(static_cast<Dart_Isolate>(nullptr), Dart_CurrentIsolate());
+}
+
 // Test to ensure that an exception is thrown if no isolate creation
 // callback has been set by the embedder when an isolate is spawned.
 void IsolateSpawn(const char* platform_script_value) {
